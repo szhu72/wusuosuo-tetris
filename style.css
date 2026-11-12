@@ -283,3 +283,11 @@ body { min-height: 100vh; min-height: 100dvh; align-items: stretch; }
 
 /* 暫停按鈕 */
 .pause-btn { flex: 0 0 88px; background: #2f2f55; font-size: 14px; }
+
+/* 音效開關、按住中的按鈕 */
+.sound-btn {
+    position: absolute; left: 10px; top: 8px; background: #252545; color: #dcdde1; border: 1px solid #3d3d6b;
+    border-radius: 6px; padding: 3px 8px; font-size: 13px; cursor: pointer;
+}
+.game-header { position: relative; }
+.touch-btn.pressed { transform: translateY(3px); box-shadow: 0 1px 0 #181830; background: #3b3b66; }

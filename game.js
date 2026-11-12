@@ -50,6 +50,56 @@ const LeaderboardAPI = {
     }
 };
 
+// ---------------- 音效（Web Audio 即時合成，不需要音檔） ----------------
+class SlimeSFX {
+    constructor() {
+        this.ctx = null;
+        this.muted = SafeStorage.getItem('slime_sfx_muted') === '1';
+        const unlock = () => { this.ensure(); };
+        ['pointerdown', 'touchstart', 'keydown'].forEach((ev) => window.addEventListener(ev, unlock, { passive: true }));
+    }
+    ensure() {
+        if (this.muted) return null;
+        try {
+            if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            if (this.ctx.state === 'suspended') this.ctx.resume();
+        } catch (e) { return null; }
+        return this.ctx;
+    }
+    setMuted(m) { this.muted = m; SafeStorage.setItem('slime_sfx_muted', m ? '1' : '0'); }
+    tone(freq, dur, { type = 'sine', vol = 0.18, slide = 0, delay = 0 } = {}) {
+        const ctx = this.ensure(); if (!ctx) return;
+        const t = ctx.currentTime + delay;
+        const o = ctx.createOscillator(), gn = ctx.createGain();
+        o.type = type; o.frequency.setValueAtTime(freq, t);
+        if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, freq * slide), t + dur);
+        gn.gain.setValueAtTime(0.0001, t);
+        gn.gain.exponentialRampToValueAtTime(vol, t + 0.012);
+        gn.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(gn).connect(ctx.destination);
+        o.start(t); o.stop(t + dur + 0.02);
+    }
+    // 消除：行數越多音階越高越華麗，連擊會整體升調
+    clear(lines, combo) {
+        const up = Math.pow(2, Math.min(combo - 1, 8) / 12);
+        const scale = [523.25, 659.25, 783.99, 1046.5, 1318.5];
+        const n = Math.min(lines + 1, 5);
+        for (let i = 0; i < n; i++) this.tone(scale[i] * up, 0.16, { type: 'triangle', vol: 0.16, delay: i * 0.055 });
+        this.tone(220 * up, 0.12, { type: 'sine', vol: 0.12, slide: 2.2 }); // 「啵」的 Q 彈感
+        if (lines >= 4) {
+            [1046.5, 1318.5, 1568].forEach((f) => this.tone(f * up, 0.45, { type: 'sine', vol: 0.1, delay: 0.3 }));
+        }
+    }
+    land() { this.tone(180, 0.07, { type: 'sine', vol: 0.09, slide: 0.6 }); }
+    hardDrop() { this.tone(140, 0.12, { type: 'triangle', vol: 0.2, slide: 0.45 }); }
+    rotate() { this.tone(880, 0.04, { type: 'square', vol: 0.03 }); }
+    garbage() { this.tone(110, 0.25, { type: 'sawtooth', vol: 0.08, slide: 0.7 }); }
+    attack() { this.tone(660, 0.12, { type: 'square', vol: 0.05, slide: 1.6 }); }
+    countdown(go) { this.tone(go ? 1046.5 : 659.25, go ? 0.3 : 0.12, { type: 'triangle', vol: 0.15 }); }
+    win() { [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => this.tone(f, 0.22, { type: 'triangle', vol: 0.15, delay: i * 0.11 })); }
+    lose() { [392, 329.6, 261.6, 196].forEach((f, i) => this.tone(f, 0.25, { type: 'sine', vol: 0.13, delay: i * 0.14 })); }
+}
+
 // 可重現的亂數（PK 雙方用同一個種子 → 拿到一模一樣的方塊順序）
 function mulberry32(seed) {
     let a = seed >>> 0;
@@ -75,7 +125,14 @@ class SlimeTetris {
         this.opts = opts;
         this.rng = typeof opts.seed === 'number' ? mulberry32(opts.seed) : Math.random;
         this.garbageRng = typeof opts.seed === 'number' ? mulberry32(opts.seed ^ 0x9E3779B9) : Math.random;
-        this.pendingGarbage = 0;
+        this.pendingGarbage = 0;   // 待收的垃圾行
+        this.sfx = window.__slimeSfx || (window.__slimeSfx = new SlimeSFX());
+        // 方向鍵長按：鍵盤 / 觸控分開設定（DAS＝開始連續移動前的等待，ARR＝之後每格間隔，毫秒）
+        this.TIMING = { key: { das: 130, arr: 40 }, touch: { das: 160, arr: 60 }, soft: { das: 90, arr: 35 } };
+        this.input = { dir: 0, dirSrc: 'key', dirStart: 0, dirMoves: 0, held: { '-1': false, '1': false }, soft: false, softStart: 0, softMoves: 0 };
+        this.clearing = null;          // 消除動畫進行中
+        this.CLEAR_MS = 360;
+        this.particles = [];
         this.canvas = document.getElementById('game-canvas');
         this.ctx = this.canvas.getContext('2d');
         this.nextCanvas = document.getElementById('next-canvas');
@@ -176,12 +233,19 @@ class SlimeTetris {
     }
 
     // 繪製 Q 版史萊姆單一方塊 (圓角 + 高光水滴 + Q版大眼睛)
-    drawSlimeBlock(ctx, x, y, color, size = this.SIZE) {
+    drawSlimeBlock(ctx, x, y, color, size = this.SIZE, fx = null) {
         const px = x * size;
         const py = y * size;
         const radius = size * 0.3;
 
         ctx.save();
+        if (fx) {
+            if (fx.alpha !== undefined) ctx.globalAlpha = Math.max(0, fx.alpha);
+            if (fx.scale !== undefined && fx.scale !== 1) {
+                const cx = px + size / 2, cy = py + size / 2;
+                ctx.translate(cx, cy); ctx.scale(fx.scale, fx.scale); ctx.translate(-cx, -cy);
+            }
+        }
         
         // 主體圓角矩形 (Q彈史萊姆身軀)
         ctx.fillStyle = color;
@@ -204,6 +268,33 @@ class SlimeTetris {
         ctx.beginPath();
         ctx.rect(px + 2, py + size - 4, size - 4, 2);
         ctx.fill();
+
+        if (fx && fx.face === 'happy') {
+            // 開心表情：^ ^ 眼睛 + 張嘴 + 腮紅
+            ctx.strokeStyle = '#1e272e';
+            ctx.lineWidth = Math.max(1.2, size * 0.08);
+            ctx.lineCap = 'round';
+            const ey = py + size * 0.46, ew = size * 0.11;
+            [0.33, 0.67].forEach((fxp) => {
+                const ex = px + size * fxp;
+                ctx.beginPath(); ctx.moveTo(ex - ew, ey + ew * 0.5); ctx.lineTo(ex, ey - ew * 0.5); ctx.lineTo(ex + ew, ey + ew * 0.5); ctx.stroke();
+            });
+            ctx.fillStyle = '#1e272e';
+            ctx.beginPath(); ctx.arc(px + size * 0.5, py + size * 0.64, size * 0.09, 0, Math.PI); ctx.fill();
+            ctx.fillStyle = 'rgba(255, 120, 150, 0.6)';
+            ctx.beginPath();
+            ctx.arc(px + size * 0.2, py + size * 0.62, size * 0.07, 0, Math.PI * 2);
+            ctx.arc(px + size * 0.8, py + size * 0.62, size * 0.07, 0, Math.PI * 2);
+            ctx.fill();
+            if (fx.flash) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+                ctx.beginPath();
+                if (ctx.roundRect) ctx.roundRect(px + 1, py + 1, size - 2, size - 2, radius); else ctx.rect(px + 1, py + 1, size - 2, size - 2);
+                ctx.fill();
+            }
+            ctx.restore();
+            return;
+        }
 
         // Q版眼睛 (左眼與右眼)
         const eyeY = py + size * 0.45;
@@ -260,6 +351,13 @@ class SlimeTetris {
             requestAnimationFrame(this.gameLoop.bind(this));
             return;
         }
+        if (this.clearing) {                 // 消除動畫中：暫停下落與操作
+            if (time - this.clearing.t0 >= this.CLEAR_MS) this.finishClear();
+            this.draw();
+            requestAnimationFrame(this.gameLoop.bind(this));
+            return;
+        }
+        this.updateHeldInput(time);
         this.dropCounter += deltaTime;
 
         // 10 階段難度遞減 (Level 1: 1000ms -> Level 10: 100ms)
@@ -300,14 +398,63 @@ class SlimeTetris {
         return y;
     }
 
+    // ---- 長按輸入：在遊戲迴圈中依時間計算，比 setInterval / 系統按鍵重複更穩定 ----
+    canAct() { return !this.gameOver && !this.paused; }
+    pressDir(d, src) {
+        if (!this.canAct()) return;
+        this.input.held[d] = true;
+        this.input.dir = d; this.input.dirSrc = src; this.input.dirStart = performance.now(); this.input.dirMoves = 0;
+        if (this.piece) this.move(d, 0);
+    }
+    releaseDir(d) {
+        this.input.held[d] = false;
+        if (this.input.dir === d) {
+            const other = -d;
+            if (this.input.held[other]) { this.input.dir = other; this.input.dirStart = performance.now(); this.input.dirMoves = 0; }
+            else this.input.dir = 0;
+        }
+    }
+    pressSoft() {
+        if (!this.canAct()) return;
+        this.input.soft = true; this.input.softStart = performance.now(); this.input.softMoves = 0;
+        if (this.piece) this.softDropManual();
+    }
+    releaseSoft() { this.input.soft = false; }
+    updateHeldInput(now) {
+        if (!this.piece || this.paused) return;
+        const inp = this.input;
+        if (inp.dir) {
+            const t = this.TIMING[inp.dirSrc];
+            const el = now - inp.dirStart;
+            if (el >= t.das) {
+                const target = 1 + Math.floor((el - t.das) / t.arr);
+                let steps = Math.min(target - inp.dirMoves, 10);
+                while (steps-- > 0) { if (!this.move(inp.dir, 0)) break; }
+                inp.dirMoves = target;
+            }
+        }
+        if (inp.soft && this.piece) {
+            const t = this.TIMING.soft;
+            const el = now - inp.softStart;
+            if (el >= t.das) {
+                const target = 1 + Math.floor((el - t.das) / t.arr);
+                let steps = Math.min(target - inp.softMoves, 10);
+                while (steps-- > 0 && this.piece && !this.clearing) this.softDropManual();
+                inp.softMoves = target;
+                this.dropCounter = 0;
+            }
+        }
+    }
+
     softDropStep() {
+        if (!this.piece) return;
         if (!this.move(0, 1)) {
             this.lock();
         }
     }
 
     softDropManual() {
-        if (this.gameOver) return;
+        if (this.gameOver || !this.piece) return;
         if (this.move(0, 1)) {
             this.score += 1; // Soft drop 每格 +1 分
             this.updateUI();
@@ -317,7 +464,8 @@ class SlimeTetris {
     }
 
     hardDropManual() {
-        if (this.gameOver) return;
+        if (this.gameOver || !this.piece || this.paused) return;
+        this.sfx.hardDrop();
         let dropped = 0;
         while (this.move(0, 1)) {
             dropped++;
@@ -328,6 +476,7 @@ class SlimeTetris {
     }
 
     move(dx, dy) {
+        if (!this.piece) return false;
         if (this.collide(this.piece.x + dx, this.piece.y + dy, this.piece.m)) {
             return false;
         }
@@ -337,7 +486,8 @@ class SlimeTetris {
     }
 
     rotate() {
-        if (this.gameOver) return;
+        if (this.gameOver || !this.piece || this.paused) return;
+        this.sfx.rotate();
         const m = this.piece.m;
         // 順時針旋轉矩陣
         const rotated = m[0].map((_, i) => m.map(row => row[i]).reverse());
@@ -395,18 +545,54 @@ class SlimeTetris {
         });
 
         this.triggerSquish();
-        const cleared = this.clearLines();
-        if (!cleared && this.pendingGarbage > 0) {
-            if (this.applyGarbage()) { this.endGame(); return; }
+
+        // 有滿行 → 先播放消除動畫（史萊姆開心表情 + 閃爍消失），動畫結束才真正消除
+        const full = [];
+        for (let r = 0; r < this.ROWS; r++) if (this.board[r].every(cell => cell !== 0)) full.push(r);
+        if (full.length) {
+            this.clearing = { rows: full, t0: performance.now() };
+            this.piece = null;
+            this.sfx.clear(full.length, this.combo + 1);
+            this.spawnParticles(full);
+            return;
         }
 
-        // 產生下一個方塊
-        this.piece = this.spawnNext();
+        this.sfx.land();
+        this.clearLines();
+        if (this.pendingGarbage > 0) {
+            this.sfx.garbage();
+            if (this.applyGarbage()) { this.endGame(); return; }
+        }
+        this.spawnAndCheck();
+    }
 
-        // 檢查 Game Over
+    finishClear() {
+        this.clearing = null;
+        this.clearLines();
+        this.spawnAndCheck();
+    }
+
+    spawnAndCheck() {
+        this.piece = this.spawnNext();
         if (this.collide(this.piece.x, this.piece.y, this.piece.m)) {
             this.endGame();
         }
+    }
+
+    spawnParticles(rows) {
+        const now = performance.now();
+        rows.forEach((r) => {
+            for (let c = 0; c < this.COLS; c++) {
+                const color = this.board[r][c] || '#ffffff';
+                for (let k = 0; k < 2; k++) {
+                    this.particles.push({
+                        x: (c + 0.5) * this.SIZE, y: (r + 0.5) * this.SIZE,
+                        vx: (Math.random() - 0.5) * 0.12, vy: -0.05 - Math.random() * 0.1,
+                        r: 1.5 + Math.random() * 2.5, color, t0: now + this.CLEAR_MS * 0.55, life: 520,
+                    });
+                }
+            }
+        });
     }
 
     clearLines() {
@@ -445,6 +631,7 @@ class SlimeTetris {
     // ---- PK 攻擊：收到對手的垃圾行 ----
     queueGarbage(n) {
         if (this.gameOver || n <= 0) return;
+        this.sfx.garbage();
         this.pendingGarbage = Math.min(20, this.pendingGarbage + n);
         if (this.opts.onGarbageChange) this.opts.onGarbageChange(this.pendingGarbage);
     }
@@ -531,12 +718,42 @@ class SlimeTetris {
         this.ctx.stroke();
 
         // 繪製固定於盤面上的史萊姆
+        const now = performance.now();
+        const clr = this.clearing;
+        const p = clr ? Math.min(1, (now - clr.t0) / this.CLEAR_MS) : 0;
         for (let r = 0; r < this.ROWS; r++) {
+            const isClearing = clr && clr.rows.includes(r);
             for (let c = 0; c < this.COLS; c++) {
-                if (this.board[r][c]) {
+                if (!this.board[r][c]) continue;
+                if (isClearing) {
+                    // 0–55%：開心表情 + 閃爍；55–100%：鼓起後縮小淡出（從中間往兩側，像波浪一樣消失）
+                    const stagger = Math.abs(c - 4.5) / 4.5 * 0.12;
+                    const q = Math.max(0, (p - 0.55 - stagger * 0.5) / 0.45);
+                    const flash = p < 0.55 && Math.floor((now - clr.t0) / 70) % 2 === 0;
+                    const scale = q > 0 ? (q < 0.25 ? 1 + q * 0.6 : Math.max(0, 1.15 - (q - 0.25) * 1.55)) : 1 + Math.sin(p * Math.PI * 6) * 0.04;
+                    this.drawSlimeBlock(this.ctx, c, r, this.board[r][c], this.SIZE, { face: 'happy', flash, scale, alpha: 1 - q * 0.9 });
+                } else {
                     this.drawSlimeBlock(this.ctx, c, r, this.board[r][c]);
                 }
             }
+        }
+        if (clr && p < 0.55) {   // 整行發光
+            this.ctx.fillStyle = `rgba(255, 255, 255, ${0.12 + 0.1 * Math.sin(p * Math.PI * 8)})`;
+            clr.rows.forEach((r) => this.ctx.fillRect(0, r * this.SIZE, this.W, this.SIZE));
+        }
+        // 彈跳粒子
+        if (this.particles.length) {
+            this.particles = this.particles.filter((pt) => now - pt.t0 < pt.life);
+            this.particles.forEach((pt) => {
+                const t = now - pt.t0; if (t < 0) return;
+                const k = t / pt.life;
+                this.ctx.globalAlpha = 1 - k;
+                this.ctx.fillStyle = pt.color;
+                this.ctx.beginPath();
+                this.ctx.arc(pt.x + pt.vx * t, pt.y + pt.vy * t + 0.00018 * t * t, pt.r * (1 - k * 0.5), 0, Math.PI * 2);
+                this.ctx.fill();
+            });
+            this.ctx.globalAlpha = 1;
         }
 
         // 落點預覽（虛線外框）：顯示方塊直接落下後的位置
@@ -619,18 +836,20 @@ class SlimeTetris {
                 return;
             }
             if (this.paused) return;
+            if (['ArrowLeft', 'ArrowRight', 'ArrowDown', 'ArrowUp', ' '].includes(e.key)) e.preventDefault();
+            if (e.repeat) return;   // 不使用系統按鍵重複（間隔不穩定），改由遊戲迴圈處理長按
             switch(e.key) {
                 case 'ArrowLeft':
-                    this.move(-1, 0);
+                    this.pressDir(-1, 'key');
                     break;
                 case 'ArrowRight':
-                    this.move(1, 0);
+                    this.pressDir(1, 'key');
                     break;
                 case 'ArrowUp':
                     this.rotate();
                     break;
                 case 'ArrowDown':
-                    this.softDropManual();
+                    this.pressSoft();
                     break;
                 case ' ':
                     e.preventDefault();
@@ -639,12 +858,14 @@ class SlimeTetris {
             }
         });
 
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowLeft') this.releaseDir(-1);
+            else if (e.key === 'ArrowRight') this.releaseDir(1);
+            else if (e.key === 'ArrowDown') this.releaseSoft();
+        });
+        window.addEventListener('blur', () => { this.releaseDir(-1); this.releaseDir(1); this.releaseSoft(); });
+
         // 觸控按鈕綁定 (支援連續按壓/長按 Soft Drop)
-        // 長按靈敏度：先等 initialDelay 才開始連續移動，之後每 repeatRate 毫秒移動一格
-        const REPEAT = {
-            move: { initialDelay: 220, repeatRate: 140 },   // 左右（原本 0ms 後每 80ms，降一級）
-            drop: { initialDelay: 150, repeatRate: 90 },    // 軟降
-        };
         const bindButton = (id, action, repeat = null) => {
             const btn = document.getElementById(id);
             if (!btn) return;
@@ -678,11 +899,36 @@ class SlimeTetris {
             btn.addEventListener('mouseleave', stop);
         };
 
-        bindButton('btn-left', () => this.move(-1, 0), REPEAT.move);
-        bindButton('btn-right', () => this.move(1, 0), REPEAT.move);
-        bindButton('btn-soft-drop', () => this.softDropManual(), REPEAT.drop);
+        const bindHold = (id, down, up) => {
+            const btn = document.getElementById(id);
+            if (!btn) return;
+            let active = false;
+            const start = (e) => { e.preventDefault(); if (active) return; active = true; btn.classList.add('pressed'); down(); };
+            const stop = (e) => { if (e && e.cancelable) e.preventDefault(); if (!active) return; active = false; btn.classList.remove('pressed'); up(); };
+            btn.addEventListener('touchstart', start, { passive: false });
+            btn.addEventListener('touchend', stop, { passive: false });
+            btn.addEventListener('touchcancel', stop, { passive: false });
+            btn.addEventListener('mousedown', start);
+            btn.addEventListener('mouseup', stop);
+            btn.addEventListener('mouseleave', stop);
+        };
+        bindHold('btn-left', () => this.pressDir(-1, 'touch'), () => this.releaseDir(-1));
+        bindHold('btn-right', () => this.pressDir(1, 'touch'), () => this.releaseDir(1));
+        bindHold('btn-soft-drop', () => this.pressSoft(), () => this.releaseSoft());
         bindButton('btn-rotate', () => this.rotate());
         bindButton('btn-hard-drop', () => this.hardDropManual());
+
+        // 音效開關
+        if (!document.getElementById('btn-sound')) {
+            const sb = document.createElement('button');
+            sb.id = 'btn-sound';
+            sb.className = 'sound-btn';
+            const label = () => { sb.textContent = this.sfx.muted ? '🔇' : '🔊'; sb.title = this.sfx.muted ? '開啟音效' : '關閉音效'; };
+            label();
+            sb.onclick = () => { this.sfx.setMuted(!this.sfx.muted); label(); if (!this.sfx.muted) this.sfx.land(); };
+            const header = document.querySelector('.game-header');
+            if (header) header.appendChild(sb);
+        }
 
         // 暫停按鈕；切到別的 App 或分頁時自動暫停
         const pauseBtn = document.getElementById('btn-pause');

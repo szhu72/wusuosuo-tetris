@@ -356,7 +356,13 @@
         const banner = $('#pk-banner');
         if (!game) {
             const left = match.startAt - now;
-            if (left > 0) { banner.textContent = Math.ceil(left / 1000); show('pk-banner', true); return; }
+            const sfx = window.__slimeSfx || (window.__slimeSfx = new SlimeSFX());
+            if (left > 0) {
+                const n = Math.ceil(left / 1000);
+                if (n !== match.lastBeep && n <= 3) { match.lastBeep = n; sfx.countdown(false); }
+                banner.textContent = n; show('pk-banner', true); return;
+            }
+            sfx.countdown(true);
             banner.textContent = 'GO!'; setTimeout(() => show('pk-banner', false), 600);
             startGame();
         }
@@ -383,6 +389,7 @@
                 if (atk > 0 && !match.resolved) {
                     net.push(`rooms/${roomCode}/attacks`, { from: me.uid, n: atk, t: SERVER_TIME });
                     flash(`⚔ 攻擊 +${atk}`);
+                    game.sfx.attack();
                 }
             },
             onGarbageChange: (n) => {
@@ -522,6 +529,8 @@
           <button id="pk-again" class="ui-btn primary pk-big">↻ 回房間再來一局</button>
           <button id="pk-tolobby" class="ui-btn pk-ghost">離開房間</button>`;
         show('pk-result', true);
+        const sfx = window.__slimeSfx;
+        if (sfx) { if (outcome === 'win') sfx.win(); else if (outcome === 'loss') sfx.lose(); else sfx.countdown(true); }
         $('#pk-again').onclick = async () => {
             if (room && room.host === me.uid) await net.update(`rooms/${roomCode}`, { status: 'waiting' });
             location.href = `${location.pathname}?room=${roomCode}${qs.get('net') ? '&net=' + qs.get('net') : ''}`;
