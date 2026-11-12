@@ -73,6 +73,7 @@ class SlimeTetris {
         this.lines = 0;
         this.combo = 0;
         this.gameOver = false;
+        this.paused = false;
         
         // 7-Bag 隨機演算法容器
         this.bag = [];
@@ -230,6 +231,11 @@ class SlimeTetris {
 
         const deltaTime = time - this.lastTime;
         this.lastTime = time;
+        if (this.paused) {               // 暫停中：不下落，只重畫
+            this.draw();
+            requestAnimationFrame(this.gameLoop.bind(this));
+            return;
+        }
         this.dropCounter += deltaTime;
 
         // 10 階段難度遞減 (Level 1: 1000ms -> Level 10: 100ms)
@@ -250,6 +256,23 @@ class SlimeTetris {
 
         this.draw();
         requestAnimationFrame(this.gameLoop.bind(this));
+    }
+
+    togglePause(force) {
+        if (this.gameOver) return;
+        this.paused = typeof force === 'boolean' ? force : !this.paused;
+        this.dropCounter = 0;
+        const btn = document.getElementById('btn-pause');
+        if (btn) btn.innerText = this.paused ? '▶ 繼續' : '⏸ 暫停';
+        this.draw();
+    }
+
+    // 計算目前方塊直接落下後的位置（落點預覽）
+    getGhostY() {
+        if (!this.piece) return null;
+        let y = this.piece.y;
+        while (!this.collide(this.piece.x, y + 1, this.piece.m)) y++;
+        return y;
     }
 
     softDropStep() {
@@ -413,12 +436,49 @@ class SlimeTetris {
         this.ctx.fillStyle = '#090914';
         this.ctx.fillRect(0, 0, this.W, this.H);
 
+        // 格線：輔助判斷方塊落點
+        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.13)';
+        this.ctx.lineWidth = 1 / this.DPR;
+        this.ctx.beginPath();
+        for (let c = 1; c < this.COLS; c++) {
+            this.ctx.moveTo(c * this.SIZE, 0);
+            this.ctx.lineTo(c * this.SIZE, this.H);
+        }
+        for (let r = 1; r < this.ROWS; r++) {
+            this.ctx.moveTo(0, r * this.SIZE);
+            this.ctx.lineTo(this.W, r * this.SIZE);
+        }
+        this.ctx.stroke();
+
         // 繪製固定於盤面上的史萊姆
         for (let r = 0; r < this.ROWS; r++) {
             for (let c = 0; c < this.COLS; c++) {
                 if (this.board[r][c]) {
                     this.drawSlimeBlock(this.ctx, c, r, this.board[r][c]);
                 }
+            }
+        }
+
+        // 落點預覽（虛線外框）：顯示方塊直接落下後的位置
+        if (this.piece && !this.gameOver) {
+            const gy = this.getGhostY();
+            if (gy !== null && gy > this.piece.y) {
+                const color = this.piece.c;
+                this.ctx.save();
+                this.ctx.strokeStyle = typeof color === 'string' && color.startsWith('#') ? color : 'rgba(255,255,255,0.6)';
+                this.ctx.globalAlpha = 0.55;
+                this.ctx.lineWidth = 1.5;
+                this.ctx.setLineDash([3, 2]);
+                this.piece.m.forEach((row, y) => {
+                    row.forEach((val, x) => {
+                        if (val) {
+                            const px = (this.piece.x + x) * this.SIZE + 2;
+                            const py = (gy + y) * this.SIZE + 2;
+                            this.ctx.strokeRect(px, py, this.SIZE - 4, this.SIZE - 4);
+                        }
+                    });
+                });
+                this.ctx.restore();
             }
         }
 
@@ -434,6 +494,18 @@ class SlimeTetris {
         }
 
         this.ctx.restore();
+
+        if (this.paused && !this.gameOver) {
+            this.ctx.fillStyle = 'rgba(9, 9, 20, 0.72)';
+            this.ctx.fillRect(0, 0, this.W, this.H);
+            this.ctx.fillStyle = '#4ecca3';
+            this.ctx.font = 'bold 22px sans-serif';
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText('暫停中', this.W / 2, this.H / 2 - 6);
+            this.ctx.fillStyle = '#a0a0c0';
+            this.ctx.font = '11px sans-serif';
+            this.ctx.fillText('按「▶ 繼續」或 P 鍵', this.W / 2, this.H / 2 + 16);
+        }
     }
 
     endGame() {
@@ -459,6 +531,12 @@ class SlimeTetris {
         // 鍵盤控制
         document.addEventListener('keydown', (e) => {
             if (this.gameOver) return;
+            if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') {
+                e.preventDefault();
+                this.togglePause();
+                return;
+            }
+            if (this.paused) return;
             switch(e.key) {
                 case 'ArrowLeft':
                     this.move(-1, 0);
@@ -480,40 +558,58 @@ class SlimeTetris {
         });
 
         // 觸控按鈕綁定 (支援連續按壓/長按 Soft Drop)
-        const bindButton = (id, action, allowRepeat = false) => {
+        // 長按靈敏度：先等 initialDelay 才開始連續移動，之後每 repeatRate 毫秒移動一格
+        const REPEAT = {
+            move: { initialDelay: 220, repeatRate: 140 },   // 左右（原本 0ms 後每 80ms，降一級）
+            drop: { initialDelay: 150, repeatRate: 90 },    // 軟降
+        };
+        const bindButton = (id, action, repeat = null) => {
             const btn = document.getElementById(id);
             if (!btn) return;
-            
+
+            let delayTimer = null;
             let timer = null;
+            const run = () => { if (!this.paused && !this.gameOver) action(); };
+
+            const stop = (e) => {
+                if (e && e.cancelable) e.preventDefault();
+                clearTimeout(delayTimer); delayTimer = null;
+                clearInterval(timer); timer = null;
+            };
 
             const start = (e) => {
                 e.preventDefault();
-                action();
-                if (allowRepeat) {
-                    timer = setInterval(action, 80);
-                }
-            };
-
-            const stop = (e) => {
-                if (e) e.preventDefault();
-                if (timer) {
-                    clearInterval(timer);
-                    timer = null;
+                stop();
+                run();
+                if (repeat) {
+                    delayTimer = setTimeout(() => {
+                        timer = setInterval(run, repeat.repeatRate);
+                    }, repeat.initialDelay);
                 }
             };
 
             btn.addEventListener('touchstart', start, { passive: false });
             btn.addEventListener('touchend', stop, { passive: false });
+            btn.addEventListener('touchcancel', stop, { passive: false });
             btn.addEventListener('mousedown', start);
             btn.addEventListener('mouseup', stop);
             btn.addEventListener('mouseleave', stop);
         };
 
-        bindButton('btn-left', () => this.move(-1, 0), true);
-        bindButton('btn-right', () => this.move(1, 0), true);
-        bindButton('btn-soft-drop', () => this.softDropManual(), true);
-        bindButton('btn-rotate', () => this.rotate(), false);
-        bindButton('btn-hard-drop', () => this.hardDropManual(), false);
+        bindButton('btn-left', () => this.move(-1, 0), REPEAT.move);
+        bindButton('btn-right', () => this.move(1, 0), REPEAT.move);
+        bindButton('btn-soft-drop', () => this.softDropManual(), REPEAT.drop);
+        bindButton('btn-rotate', () => this.rotate());
+        bindButton('btn-hard-drop', () => this.hardDropManual());
+
+        // 暫停按鈕；切到別的 App 或分頁時自動暫停
+        const pauseBtn = document.getElementById('btn-pause');
+        if (pauseBtn) {
+            pauseBtn.addEventListener('click', (e) => { e.preventDefault(); this.togglePause(); });
+        }
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) this.togglePause(true);
+        });
 
         // 分數上傳按鈕
         document.getElementById('btn-submit-score').onclick = async () => {

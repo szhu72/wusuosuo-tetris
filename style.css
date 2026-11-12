@@ -280,3 +280,6 @@ body { min-height: 100vh; min-height: 100dvh; align-items: stretch; }
 .sidebar { min-width: 0; max-width: 170px; }
 .touch-controls { flex: 0 0 auto; margin-top: 0; }
 .touch-btn { height: clamp(44px, 7dvh, 58px); }
+
+/* 暫停按鈕 */
+.pause-btn { flex: 0 0 88px; background: #2f2f55; font-size: 14px; }
