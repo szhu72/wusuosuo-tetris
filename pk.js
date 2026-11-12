@@ -234,7 +234,8 @@
         if (!members.includes(me.uid)) {
             if (members.length >= 2) { status('房間已滿（1 對 1）。'); return; }
             if (r.status === 'playing') { status('這個房間正在對戰中。'); return; }
-            await net.update(`rooms/${code}/players/${me.uid}`, { name: me.name, code: me.code, ready: false, online: true, joinedAt: SERVER_TIME });
+            if (r.guest && r.guest !== me.uid) { status('房間已滿（1 對 1）。'); return; }
+            await net.update(`rooms/${code}`, { guest: me.uid, [`players/${me.uid}`]: { name: me.name, code: me.code, ready: false, online: true, joinedAt: SERVER_TIME } });
         } else {
             await net.update(`rooms/${code}/players/${me.uid}`, { online: true, offAt: null });
         }
@@ -258,10 +259,8 @@
         if (unwatchRoom) { unwatchRoom(); unwatchRoom = null; }
         const others = Object.keys((r && r.players) || {}).filter((u) => u !== me.uid);
         if (!others.length) await net.remove(`rooms/${roomCode}`);
-        else {
-            await net.remove(`rooms/${roomCode}/players/${me.uid}`);
-            if (r.host === me.uid) await net.update(`rooms/${roomCode}`, { host: others[0] });
-        }
+        else if (r.host === me.uid) await net.update(`rooms/${roomCode}`, { host: others[0], guest: null, [`players/${me.uid}`]: null });
+        else await net.update(`rooms/${roomCode}`, { guest: null, [`players/${me.uid}`]: null });
         location.href = location.pathname + (qs.get('net') ? '?net=' + qs.get('net') : '');
     }
 
