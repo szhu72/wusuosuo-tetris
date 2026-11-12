@@ -15,6 +15,9 @@
     const PUBLISH_MS = 300;
 
     const qs = new URLSearchParams(location.search);
+    // 部分 App 內建瀏覽器（LINE、IG 等）不支援 confirm/alert/prompt，失敗時用預設值
+    const safeConfirm = (msg) => { try { return window.confirm(msg); } catch { return true; } };
+    const safeAlert = (msg) => { try { window.alert(msg); } catch {} };
     const $ = (sel) => document.querySelector(sel);
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const shortCode = (uid) => { let h = 2166136261; for (const ch of uid) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } let s = ''; h >>>= 0; for (let i = 0; i < 4; i++) { s += ROOM_ALPHABET[h % ROOM_ALPHABET.length]; h = Math.floor(h / ROOM_ALPHABET.length); } return s; };
@@ -174,7 +177,7 @@
         menuBtn.id = 'pk-menu-btn';
         menuBtn.className = 'pk-menu-btn hidden';
         menuBtn.textContent = '☰ 大廳';
-        menuBtn.onclick = () => { if (!match || confirm('離開目前這局，回到大廳？')) location.href = location.pathname; };
+        menuBtn.onclick = () => { if (!match || safeConfirm('離開目前這局，回到大廳？')) location.href = location.pathname; };
         document.querySelector('.game-header').appendChild(menuBtn);
     }
 
@@ -193,17 +196,30 @@
         $('#pk-rename').onclick = () => askName(true);
     }
 
-    async function askName(force) {
-        if (me.name && !force) return;
-        let name = '';
-        while (!name) {
-            name = (prompt('請輸入你的暱稱（最多 8 個字），朋友會看到這個名字：', me.name || '') || '').trim().slice(0, 8);
-            if (!name && me.name) return;
-            if (!name) name = '史萊姆' + me.code;
-        }
-        me.name = name;
-        await net.update(`players/${me.uid}`, { name, code: me.code, updatedAt: SERVER_TIME });
-        renderMe();
+    // 暱稱輸入：直接在頁面上顯示輸入框（不使用 prompt，避免 App 內建瀏覽器不支援）
+    function askName(force) {
+        if (me.name && !force) return Promise.resolve();
+        return new Promise((resolve) => {
+            $('#pk-me').innerHTML = `
+              <label class="pk-hint" for="pk-name-input">${me.name ? '修改暱稱' : '先取一個暱稱，朋友會看到這個名字'}（最多 8 個字）</label>
+              <div class="pk-join" style="margin-top:6px">
+                <input id="pk-name-input" type="text" maxlength="8" placeholder="例如：史萊姆王" value="${esc(me.name || '')}" autocomplete="off">
+                <button id="pk-name-ok" class="ui-btn primary">確定</button>
+              </div>`;
+            const input = $('#pk-name-input');
+            const done = async () => {
+                const name = input.value.trim().slice(0, 8) || me.name || ('史萊姆' + me.code);
+                $('#pk-name-ok').disabled = true;
+                me.name = name;
+                try { await net.update(`players/${me.uid}`, { name, code: me.code, updatedAt: SERVER_TIME }); }
+                catch (e) { status('暱稱儲存失敗：' + (e.code || e.message || e)); }
+                renderMe();
+                resolve();
+            };
+            $('#pk-name-ok').onclick = done;
+            input.onkeydown = (e) => { if (e.key === 'Enter') done(); };
+            if (!me.name) setTimeout(() => input.focus(), 50);
+        });
     }
 
     let selMode = { mode: 'timed', duration: 180 };
@@ -301,7 +317,7 @@
     //  房間狀態變化
     // ------------------------------------------------------------------
     function onRoom(r) {
-        if (!r) { if (!match) { alert('房間已關閉。'); location.href = location.pathname; } return; }
+        if (!r) { if (!match) { safeAlert('房間已關閉。'); location.href = location.pathname; } return; }
         room = r;
         if (r.status === 'playing' && !match) {
             if (!(r.players || {})[me.uid]) return;
@@ -580,7 +596,7 @@
         me = { uid: net.uid, code: shortCode(net.uid), name: saved.name || '', best: saved.best || 0, wins: saved.wins || 0, losses: saved.losses || 0, draws: saved.draws || 0 };
         renderMe();
         status('');
-        if (!me.name) await askName(false);
+        const namePromise = askName(false);
 
         // 雲端排行榜：每位玩家的個人最佳
         LeaderboardAPI.fetchTopScores = async () => {
@@ -589,8 +605,9 @@
         };
         LeaderboardAPI.submitScore = async () => LeaderboardAPI.fetchTopScores();
 
-        $('#pk-create').onclick = () => createRoom().catch((e) => status('建立房間失敗：' + (e.message || e)));
-        $('#pk-join').onclick = () => joinRoom($('#pk-code').value).catch((e) => status('加入失敗：' + (e.message || e)));
+        const needName = () => { if (!me.name) { status('請先輸入暱稱。'); const i = $('#pk-name-input'); if (i) i.focus(); return true; } return false; };
+        $('#pk-create').onclick = () => { if (!needName()) createRoom().catch((e) => status('建立房間失敗：' + (e.code || e.message || e))); };
+        $('#pk-join').onclick = () => { if (!needName()) joinRoom($('#pk-code').value).catch((e) => status('加入失敗：' + (e.code || e.message || e))); };
         $('#pk-ready').onclick = () => { const mine = (room.players || {})[me.uid] || {}; net.update(`rooms/${roomCode}/players/${me.uid}`, { ready: !mine.ready }); };
         $('#pk-start').onclick = () => startMatch();
         $('#pk-leave').onclick = () => leaveRoom();
@@ -599,11 +616,15 @@
             const text = `來跟我 PK 史萊姆方塊！房間碼 ${roomCode}`;
             try { if (navigator.share) { await navigator.share({ title: '史萊姆方塊 PK', text, url }); return; } } catch {}
             try { await navigator.clipboard.writeText(`${text}\n${url}`); $('#pk-room-status').textContent = '已複製邀請連結，貼給朋友就可以了！'; }
-            catch { prompt('複製這個連結傳給朋友：', url); }
+            catch { $('#pk-room-status').innerHTML = `長按複製這個連結傳給朋友：<br><span style="user-select:all;-webkit-user-select:all;word-break:break-all">${esc(url)}</span>`; }
         };
 
         const code = qs.get('room');
-        if (code) await joinRoom(code);
+        if (code) {
+            if (!me.name) status(`先取暱稱，再自動加入房間 ${code}`);
+            await namePromise;
+            await joinRoom(code);
+        }
     }
 
     window.SlimePK = { boot };
