@@ -257,3 +257,26 @@ input {
 .danger:active { background: #ab4771; box-shadow: 0 1px 0 #542237; }
 
 .hidden { display: none !important; }
+
+/* ===== 手機版面修正：使用實際可見高度、盤面自適應、按鈕固定在可見範圍 ===== */
+html, body { height: 100%; }
+body { min-height: 100vh; min-height: 100dvh; align-items: stretch; }
+#app-container {
+    height: 100vh;
+    height: 100dvh;           /* 扣除瀏覽器網址列/工具列後的實際可見高度 */
+    max-height: none;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+}
+.main-layout {
+    flex: 1 1 auto;
+    min-height: 0;            /* 允許盤面區域縮放，不把按鈕擠出畫面 */
+    margin-top: 0;
+    align-items: center;
+}
+.canvas-wrapper { flex: 0 0 auto; }
+#game-canvas { width: 100%; height: 100%; }
+.sidebar { min-width: 0; max-width: 170px; }
+.touch-controls { flex: 0 0 auto; margin-top: 0; }
+.touch-btn { height: clamp(44px, 7dvh, 58px); }

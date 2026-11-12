@@ -57,6 +57,12 @@ class SlimeTetris {
         this.nextCanvas = document.getElementById('next-canvas');
         this.nextCtx = this.nextCanvas.getContext('2d');
 
+        // 高解析度繪製：依螢幕像素密度放大畫布，邏輯座標維持 200x400 / 80x80
+        this.DPR = Math.min(window.devicePixelRatio || 1, 3);
+        this.W = 200; this.H = 400; this.NW = 80; this.NH = 80;
+        this.canvas.width = this.W * this.DPR; this.canvas.height = this.H * this.DPR;
+        this.nextCanvas.width = this.NW * this.DPR; this.nextCanvas.height = this.NH * this.DPR;
+
         this.COLS = 10;
         this.ROWS = 20;
         this.SIZE = 20;
@@ -198,11 +204,12 @@ class SlimeTetris {
     }
 
     drawNext() {
-        this.nextCtx.clearRect(0, 0, this.nextCanvas.width, this.nextCanvas.height);
+        this.nextCtx.setTransform(this.DPR, 0, 0, this.DPR, 0, 0);
+        this.nextCtx.clearRect(0, 0, this.NW, this.NH);
         const m = this.nextPiece.m;
         const size = 16;
-        const offsetX = (this.nextCanvas.width - m[0].length * size) / 2;
-        const offsetY = (this.nextCanvas.height - m.length * size) / 2;
+        const offsetX = (this.NW - m[0].length * size) / 2;
+        const offsetY = (this.NH - m.length * size) / 2;
 
         for (let r = 0; r < m.length; r++) {
             for (let c = 0; c < m[r].length; c++) {
@@ -390,20 +397,21 @@ class SlimeTetris {
     }
 
     draw() {
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.setTransform(this.DPR, 0, 0, this.DPR, 0, 0);
+        this.ctx.clearRect(0, 0, this.W, this.H);
 
         this.ctx.save();
         
         // 落地輕微 Squish 擠壓繪製效果
         if (this.squishFactor !== 1.0) {
-            this.ctx.translate(0, this.canvas.height);
+            this.ctx.translate(0, this.H);
             this.ctx.scale(1.0, this.squishFactor);
-            this.ctx.translate(0, -this.canvas.height);
+            this.ctx.translate(0, -this.H);
         }
 
         // 繪製背景網格底色
         this.ctx.fillStyle = '#090914';
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.fillRect(0, 0, this.W, this.H);
 
         // 繪製固定於盤面上的史萊姆
         for (let r = 0; r < this.ROWS; r++) {
@@ -528,3 +536,24 @@ class SlimeTetris {
 window.addEventListener('DOMContentLoaded', () => {
     new SlimeTetris();
 });
+
+// ---- 版面自適應：依可用空間放大遊戲盤面，保持 1:2 比例，按鈕永遠在畫面內 ----
+(function () {
+    function fitLayout() {
+        const main = document.querySelector('.main-layout');
+        const wrap = document.getElementById('canvas-container');
+        const side = document.querySelector('.sidebar');
+        if (!main || !wrap) return;
+        const border = 8; // 外框 4px x 2
+        const maxW = main.clientWidth * 0.62;
+        const maxH = main.clientHeight;
+        const inner = Math.max(120, Math.floor(Math.min(maxW - border, (maxH - border) / 2)));
+        wrap.style.width = (inner + border) + 'px';
+        wrap.style.height = (inner * 2 + border) + 'px';
+        if (side) side.style.height = (inner * 2 + border) + 'px';
+    }
+    window.addEventListener('DOMContentLoaded', fitLayout);
+    window.addEventListener('resize', fitLayout);
+    window.addEventListener('orientationchange', () => setTimeout(fitLayout, 200));
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', fitLayout);
+})();
