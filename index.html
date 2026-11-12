@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>史萊姆方塊：Q彈大冒險</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app-container">
+        <header class="game-header">
+            <h1 class="game-title">史萊姆方塊 <span>Q彈大冒險</span></h1>
+        </header>
+        <div class="main-layout">
+            <div class="canvas-wrapper" id="canvas-container">
+                <canvas id="game-canvas" width="200" height="400"></canvas>
+                <div id="game-overlay" class="overlay hidden">
+                    <div class="overlay-content">
+                        <h2 id="overlay-title">GAME OVER</h2>
+                        <p id="final-score-text">得分: 0</p>
+                        <div class="input-group">
+                            <input type="text" id="player-name" placeholder="輸入暱稱" maxlength="8" autocomplete="off">
+                            <button id="btn-submit-score" class="ui-btn primary">上傳分數</button>
+                        </div>
+                        <button id="btn-restart" class="ui-btn action">重新開始</button>
+                    </div>
+                </div>
+            </div>
+            <aside class="sidebar">
+                <div class="panel">
+                    <div class="panel-title">NEXT</div>
+                    <div class="next-box">
+                        <canvas id="next-canvas" width="80" height="80"></canvas>
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="stat-item"><span>SCORE</span><span id="score-val" class="val">0</span></div>
+                    <div class="stat-item"><span>LEVEL</span><span id="level-val" class="val">1</span></div>
+                    <div class="stat-item"><span>LINES</span><span id="lines-val" class="val">0</span></div>
+                    <div class="stat-item"><span>COMBO</span><span id="combo-val" class="val">0</span></div>
+                </div>
+                <div class="panel leaderboard-panel">
+                    <div class="panel-title">TOP 5 排行榜</div>
+                    <ul id="leaderboard-list">
+                        <li class="loading-text">載入中...</li>
+                    </ul>
+                </div>
+            </aside>
+        </div>
+        <div class="touch-controls">
+            <div class="control-row">
+                <button id="btn-rotate" class="touch-btn action-btn">↻ 旋轉</button>
+                <button id="btn-hard-drop" class="touch-btn danger">⚡ 直落</button>
+            </div>
+            <div class="control-row">
+                <button id="btn-left" class="touch-btn">◀</button>
+                <button id="btn-soft-drop" class="touch-btn">▼ 軟降</button>
+                <button id="btn-right" class="touch-btn">▶</button>
+            </div>
+        </div>
+    </div>
+    <script src="game.js"></script>
+</body>
+</html>
