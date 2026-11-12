@@ -1,0 +1,71 @@
+/* ===== 大廳 / PK 房間 / 結果 ===== */
+.pk-overlay {
+    position: fixed; inset: 0; z-index: 50;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    padding: 16px; background: rgba(12, 12, 28, 0.94); overflow-y: auto;
+}
+.pk-card {
+    width: 100%; max-width: 360px; background: #1f1f3d; border: 1px solid #3d3d6b; border-radius: 12px;
+    padding: 16px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}
+.pk-title { text-align: center; color: #4ecca3; font-size: 22px; }
+.pk-title span { color: #ff9f43; font-size: 13px; margin-left: 4px; }
+.pk-me { background: #252545; border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+.pk-tag { color: #feca57; font-family: monospace; font-size: 12px; }
+.pk-link { background: none; border: none; color: #4ecca3; font-size: 12px; cursor: pointer; margin-left: 4px; }
+.pk-hint { color: #a0a0c0; font-size: 12px; line-height: 1.5; }
+.pk-status { color: #ff9f43; font-size: 12px; min-height: 1em; text-align: center; }
+.pk-section { border-top: 1px dashed #3d3d6b; padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.pk-section h3, .pk-card h3 { font-size: 15px; color: #fff; }
+.pk-modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.pk-modes button { padding: 8px 2px; border-radius: 6px; border: 1px solid #3d3d6b; background: #252545; color: #dcdde1; font-size: 12px; cursor: pointer; }
+.pk-modes button.on { background: #4ecca3; color: #121224; border-color: #4ecca3; font-weight: bold; }
+.pk-big { padding: 12px; font-size: 15px; }
+.pk-ghost { background: transparent; color: #a0a0c0; border: 1px solid #3d3d6b; }
+.pk-join { display: flex; gap: 6px; }
+.pk-join input { flex: 1; text-transform: uppercase; letter-spacing: 3px; font-size: 16px; }
+.pk-join button { width: 80px; }
+.pk-roomcode { font-family: monospace; font-size: 24px; letter-spacing: 4px; color: #feca57; margin-left: 6px; }
+.pk-players { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.pk-players li { display: flex; justify-content: space-between; gap: 8px; background: #252545; border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.pk-players li.off { opacity: .55; }
+.pk-players li.pk-empty { color: #a0a0c0; font-size: 12px; flex-direction: column; }
+.ui-btn:disabled { opacity: .45; cursor: not-allowed; }
+.pk-menu-btn {
+    position: absolute; right: 10px; top: 8px; background: #252545; color: #dcdde1; border: 1px solid #3d3d6b;
+    border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+}
+.game-header { position: relative; }
+
+/* 對戰中側欄 */
+.pk-panel { display: flex; flex-direction: column; gap: 4px; flex: 1; min-height: 0; }
+.pk-panel #pk-timer { font-size: 13px; color: #feca57; text-transform: none; }
+.pk-panel #pk-timer.pk-urgent { color: #ff6b6b; }
+.pk-opp-name { font-size: 11px; color: #dcdde1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#pk-opp-canvas { width: 60px; height: 120px; align-self: center; border: 1px solid #3d3d6b; border-radius: 3px; }
+.pk-garbage { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #a0a0c0; }
+.pk-garbage i { display: block; width: 8px; height: 26px; background: #2a2a4a; border-radius: 3px; position: relative; overflow: hidden; }
+.pk-garbage b { color: #ff6b6b; }
+
+/* 倒數 / 攻擊提示 */
+.pk-banner {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 64px; font-weight: bold; color: #4ecca3; text-shadow: 0 4px 12px rgba(0,0,0,.6);
+    pointer-events: none; z-index: 5;
+}
+.pk-banner.pk-small { font-size: 18px; align-items: flex-start; padding-top: 30%; color: #feca57; }
+
+/* 結果 */
+.pk-outcome { text-align: center; font-size: 30px; font-weight: bold; }
+.pk-win { color: #feca57; } .pk-loss { color: #ff6b6b; } .pk-draw { color: #4ecca3; }
+.pk-score-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.pk-score-table th, .pk-score-table td { padding: 6px; text-align: center; border-bottom: 1px solid #323259; }
+.pk-score-table th { color: #a0a0c0; font-size: 12px; font-weight: normal; }
+.pk-score-table tr.me td { color: #4ecca3; font-weight: bold; }
+.pk-pb { color: #feca57; text-align: center; font-weight: bold; font-size: 13px; }
+
+/* 對戰時精簡側欄：隱藏等級/連擊，留空間給對手盤面 */
+body.pk-mode .sidebar > .panel:nth-child(2) .stat-item:nth-child(2),
+body.pk-mode .sidebar > .panel:nth-child(2) .stat-item:nth-child(4) { display: none; }
+body.pk-mode .sidebar { gap: 6px; }
+.pk-panel { overflow: hidden; padding: 6px 8px; }

@@ -50,8 +50,32 @@ const LeaderboardAPI = {
     }
 };
 
+// 可重現的亂數（PK 雙方用同一個種子 → 拿到一模一樣的方塊順序）
+function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function () {
+        a = (a + 0x6D2B79F5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
 class SlimeTetris {
-    constructor() {
+    /**
+     * opts（皆為選填，單人模式不需要）：
+     *  seed        PK 共用種子
+     *  onClear(cleared, combo)  消行時回呼（用來計算攻擊）
+     *  onGameOver(game)         堆到頂時回呼；有提供時不顯示單人結束畫面
+     *  minLevel()               回傳目前最低速度等級（生存 PK 隨時間加速）
+     *  pvp                      PK 模式：停用暫停
+     */
+    constructor(opts = {}) {
+        this.opts = opts;
+        this.rng = typeof opts.seed === 'number' ? mulberry32(opts.seed) : Math.random;
+        this.garbageRng = typeof opts.seed === 'number' ? mulberry32(opts.seed ^ 0x9E3779B9) : Math.random;
+        this.pendingGarbage = 0;
         this.canvas = document.getElementById('game-canvas');
         this.ctx = this.canvas.getContext('2d');
         this.nextCanvas = document.getElementById('next-canvas');
@@ -122,7 +146,7 @@ class SlimeTetris {
             const types = ['I', 'J', 'L', 'O', 'S', 'T', 'Z'];
             // Fisher-Yates 洗牌
             for (let i = types.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
+                const j = Math.floor(this.rng() * (i + 1));
                 [types[i], types[j]] = [types[j], types[i]];
             }
             this.bag = types;
@@ -239,7 +263,8 @@ class SlimeTetris {
         this.dropCounter += deltaTime;
 
         // 10 階段難度遞減 (Level 1: 1000ms -> Level 10: 100ms)
-        const speed = Math.max(100, 1000 - (this.level - 1) * 100);
+        const effLevel = Math.max(this.level, this.opts.minLevel ? this.opts.minLevel() : 1);
+        const speed = Math.max(100, 1000 - (effLevel - 1) * 100);
 
         if (this.dropCounter > speed) {
             this.softDropStep();
@@ -259,7 +284,7 @@ class SlimeTetris {
     }
 
     togglePause(force) {
-        if (this.gameOver) return;
+        if (this.gameOver || this.opts.pvp) return;
         this.paused = typeof force === 'boolean' ? force : !this.paused;
         this.dropCounter = 0;
         const btn = document.getElementById('btn-pause');
@@ -370,7 +395,10 @@ class SlimeTetris {
         });
 
         this.triggerSquish();
-        this.clearLines();
+        const cleared = this.clearLines();
+        if (!cleared && this.pendingGarbage > 0) {
+            if (this.applyGarbage()) { this.endGame(); return; }
+        }
 
         // 產生下一個方塊
         this.piece = this.spawnNext();
@@ -405,11 +433,63 @@ class SlimeTetris {
 
             // 難度遞增：每消除 10 行升 1 Level (最高 10 階)
             this.level = Math.min(10, Math.floor(this.lines / 10) + 1);
+            if (this.opts.onClear) this.opts.onClear(cleared, this.combo);
         } else {
             this.combo = 0;
         }
 
         this.updateUI();
+        return cleared;
+    }
+
+    // ---- PK 攻擊：收到對手的垃圾行 ----
+    queueGarbage(n) {
+        if (this.gameOver || n <= 0) return;
+        this.pendingGarbage = Math.min(20, this.pendingGarbage + n);
+        if (this.opts.onGarbageChange) this.opts.onGarbageChange(this.pendingGarbage);
+    }
+
+    // 用自己消除的行數抵銷待收的垃圾行，回傳抵銷後剩下的攻擊量
+    cancelGarbage(attack) {
+        const used = Math.min(attack, this.pendingGarbage);
+        this.pendingGarbage -= used;
+        if (this.opts.onGarbageChange) this.opts.onGarbageChange(this.pendingGarbage);
+        return attack - used;
+    }
+
+    // 把待收垃圾行從底部推上來（同一批缺口在同一欄）。回傳 true 表示被推出頂端 → 輸
+    applyGarbage() {
+        const n = this.pendingGarbage;
+        this.pendingGarbage = 0;
+        if (this.opts.onGarbageChange) this.opts.onGarbageChange(0);
+        let toppedOut = false;
+        const hole = Math.floor(this.garbageRng() * this.COLS);
+        for (let i = 0; i < n; i++) {
+            const top = this.board.shift();
+            if (top.some(cell => cell !== 0)) toppedOut = true;
+            const row = Array(this.COLS).fill('#6b6b80');
+            row[hole] = 0;
+            this.board.push(row);
+        }
+        return toppedOut;
+    }
+
+    // 給對手看的精簡盤面（含目前操作中的方塊）
+    snapshot() {
+        const grid = this.board.map(row => row.map(c => (c ? (c === '#6b6b80' ? 'g' : 'x') : '.')));
+        if (this.piece && !this.gameOver) {
+            this.piece.m.forEach((row, y) => row.forEach((v, x) => {
+                const by = this.piece.y + y, bx = this.piece.x + x;
+                if (v && by >= 0 && by < this.ROWS && bx >= 0 && bx < this.COLS) grid[by][bx] = 'x';
+            }));
+        }
+        return grid.map(r => r.join('')).join('');
+    }
+
+    // 外部結束（對手輸了、時間到）：停止遊戲但不顯示單人結束畫面
+    stop() {
+        this.gameOver = true;
+        this.draw();
     }
 
     updateUI() {
@@ -509,7 +589,9 @@ class SlimeTetris {
     }
 
     endGame() {
+        if (this.gameOver) return;
         this.gameOver = true;
+        if (this.opts.onGameOver) { this.draw(); this.opts.onGameOver(this); return; }
         document.getElementById('final-score-text').innerText = '得分: ' + Math.floor(this.score);
         document.getElementById('game-overlay').classList.remove('hidden');
     }
@@ -630,7 +712,8 @@ class SlimeTetris {
 
 // 確保 DOM 載入後初始化遊戲
 window.addEventListener('DOMContentLoaded', () => {
-    new SlimeTetris();
+    if (window.SlimePK) window.SlimePK.boot();   // 有大廳/PK 模組時由它決定何時開始
+    else window.__game = new SlimeTetris();
 });
 
 // ---- 版面自適應：依可用空間放大遊戲盤面，保持 1:2 比例，按鈕永遠在畫面內 ----

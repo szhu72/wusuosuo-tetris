@@ -1,0 +1,40 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "players": {
+      ".read": "auth != null",
+      ".indexOn": ["best"],
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid",
+        "name": { ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12" },
+        "code": { ".validate": "newData.isString() && newData.val().length <= 8" },
+        "best": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9999999" },
+        "wins": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+        "losses": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+        "draws": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+        "updatedAt": { ".validate": "newData.isNumber()" },
+        "$other": { ".validate": false }
+      }
+    },
+    "rooms": {
+      "$code": {
+        ".read": "auth != null",
+        ".write": "auth != null && (!data.exists() || data.child('players').child(auth.uid).exists() || (newData.child('players').child(auth.uid).exists() && data.child('players').numChildren() < 2))",
+        ".validate": "$code.length === 5",
+        "players": {
+          "$uid": {
+            ".validate": "data.exists() || $uid === auth.uid",
+            "name": { ".validate": "newData.isString() && newData.val().length <= 12" },
+            "board": { ".validate": "newData.isString() && newData.val().length <= 200" }
+          }
+        },
+        "attacks": {
+          "$id": {
+            ".validate": "newData.hasChildren(['from', 'n']) && newData.child('from').val() === auth.uid && newData.child('n').isNumber() && newData.child('n').val() >= 1 && newData.child('n').val() <= 12"
+          }
+        }
+      }
+    }
+  }
+}
