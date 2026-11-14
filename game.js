@@ -91,6 +91,10 @@ class SlimeSFX {
         }
     }
     land() { this.tone(180, 0.07, { type: 'sine', vol: 0.09, slide: 0.6 }); }
+    bomb() { this.tone(90, 0.35, { type: 'sawtooth', vol: 0.14, slide: 0.4 }); this.tone(60, 0.4, { type: 'square', vol: 0.06, slide: 0.5, delay: 0.03 }); }
+    melt() { this.tone(900, 0.14, { type: 'sine', vol: 0.08, slide: 0.45 }); }
+    zombie() { [196, 185, 174.6].forEach((f, i) => this.tone(f, 0.22, { type: 'sawtooth', vol: 0.06, delay: i * 0.12 })); }
+    crack() { this.tone(1400, 0.05, { type: 'square', vol: 0.06 }); this.tone(700, 0.08, { type: 'square', vol: 0.05, delay: 0.04 }); }
     hardDrop() { this.tone(140, 0.12, { type: 'triangle', vol: 0.2, slide: 0.45 }); }
     rotate() { this.tone(880, 0.04, { type: 'square', vol: 0.03 }); }
     garbage() { this.tone(110, 0.25, { type: 'sawtooth', vol: 0.08, slide: 0.7 }); }
@@ -126,6 +130,13 @@ class SlimeTetris {
         this.rng = typeof opts.seed === 'number' ? mulberry32(opts.seed) : Math.random;
         this.garbageRng = typeof opts.seed === 'number' ? mulberry32(opts.seed ^ 0x9E3779B9) : Math.random;
         this.pendingGarbage = 0;   // 待收的垃圾行
+        this.pendingHard = 0;      // 其中幾行是硬殼垃圾（特殊模式 PK）
+        // 特殊史萊姆模式：約每 9 塊出現 1 個特殊史萊姆（PK 用共同種子，雙方同時同位置出現）
+        this.special = !!opts.special;
+        this.specialRng = typeof opts.seed === 'number' ? mulberry32(opts.seed ^ 0x51ED5EED) : Math.random;
+        this.SPECIAL_RATE = 1 / 9;
+        this.SPECIAL_KINDS = [['star', 0.3], ['bomb', 0.25], ['melt', 0.2], ['zombie', 0.25]];
+        this.clearMods = null;
         this.sfx = window.__slimeSfx || (window.__slimeSfx = new SlimeSFX());
         // 方向鍵長按：鍵盤 / 觸控分開設定（DAS＝開始連續移動前的等待，ARR＝之後每格間隔，毫秒）
         this.TIMING = { key: { das: 150, arr: 55 }, touch: { das: 170, arr: 70 }, soft: { das: 80, arr: 40 } };
@@ -217,14 +228,27 @@ class SlimeTetris {
 
     generatePiece() {
         const type = this.getNextPieceFromBag();
-        return {
-            type: type,
-            m: this.SHAPES[type],
-            c: this.COLORS[type],
-            x: 0,
-            y: 0
-        };
+        const m = this.SHAPES[type];
+        const k = m.map(row => row.map(() => ''));
+        if (this.special) {
+            const roll = this.specialRng();
+            const pickKind = this.specialRng();
+            const pickCell = this.specialRng();
+            if (roll < this.SPECIAL_RATE) {
+                let acc = 0, kind = 'star';
+                for (const [name, w] of this.SPECIAL_KINDS) { acc += w; if (pickKind < acc) { kind = name; break; } }
+                const cells = [];
+                m.forEach((row, r) => row.forEach((v, c) => { if (v) cells.push([r, c]); }));
+                const [sr, sc] = cells[Math.floor(pickCell * cells.length)];
+                k[sr][sc] = kind;
+            }
+        }
+        return { type, m, k, c: this.COLORS[type], x: 0, y: 0 };
     }
+
+    // 盤面格子的編碼："顏色" 或 "顏色|特殊種類"
+    static cellColor(cell) { return typeof cell === 'string' ? cell.split('|')[0] : cell; }
+    static cellKind(cell) { return typeof cell === 'string' && cell.includes('|') ? cell.split('|')[1] : ''; }
 
     spawnNext() {
         const p = this.nextPiece;
@@ -237,7 +261,68 @@ class SlimeTetris {
     }
 
     // 繪製 Q 版史萊姆單一方塊 (圓角 + 高光水滴 + Q版大眼睛)
-    drawSlimeBlock(ctx, x, y, color, size = this.SIZE, fx = null) {
+    drawSlimeBlock(ctx, x, y, cell, size = this.SIZE, fx = null, kindOverride = '') {
+        const kind = kindOverride || SlimeTetris.cellKind(cell);
+        let color = SlimeTetris.cellColor(cell);
+        if (kind === 'zombie') color = '#8aa889';      // 殭屍：灰綠色
+        if (kind === 'hard') color = '#55556a';        // 硬殼垃圾：深灰
+        this.drawSlimeBody(ctx, x, y, color, size, fx);
+        if (kind) this.drawAccessory(ctx, x * size, y * size, size, kind, fx);
+    }
+
+    applyFx(ctx, px, py, size, fx) {
+        if (!fx) return;
+        if (fx.alpha !== undefined) ctx.globalAlpha = Math.max(0, fx.alpha);
+        if (fx.scale !== undefined && fx.scale !== 1) { const cx = px + size / 2, cy = py + size / 2; ctx.translate(cx, cy); ctx.scale(fx.scale, fx.scale); ctx.translate(-cx, -cy); }
+        if (fx.scaleX !== undefined) { const cx = px + size / 2, cy = fx.anchor === 'bottom' ? py + size : py + size / 2; ctx.translate(cx, cy); ctx.scale(fx.scaleX, fx.scaleY); ctx.translate(-cx, -cy); }
+    }
+
+    // 特殊史萊姆的配件：⭐ 星星髮夾、💣 引線、💧 水滴、🧟 縫線、🛡 頭盔
+    drawAccessory(ctx, px, py, s, kind, fx) {
+        ctx.save();
+        this.applyFx(ctx, px, py, s, fx);
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        if (kind === 'star') {
+            const cx = px + s * 0.74, cy = py + s * 0.22, R = s * 0.3, r = s * 0.13;
+            ctx.beginPath();
+            for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r : R; ctx.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr); }
+            ctx.closePath(); ctx.fillStyle = '#ffe066'; ctx.fill();
+            ctx.lineWidth = Math.max(1.2, s * 0.06); ctx.strokeStyle = '#1e272e'; ctx.stroke();
+        } else if (kind === 'bomb') {
+            // 炸彈：深色身體 + 粗引線 + 火花
+            ctx.fillStyle = 'rgba(20,20,30,.55)';
+            ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(px + 1, py + 1, s - 2, s - 2, s * 0.3); else ctx.rect(px + 1, py + 1, s - 2, s - 2); ctx.fill();
+            ctx.strokeStyle = '#1e272e'; ctx.lineWidth = Math.max(1.6, s * 0.11);
+            ctx.beginPath(); ctx.moveTo(px + s * 0.45, py + s * 0.14); ctx.quadraticCurveTo(px + s * 0.6, py - s * 0.14, px + s * 0.84, py + s * 0.0); ctx.stroke();
+            ctx.fillStyle = '#ff9f43'; ctx.beginPath(); ctx.arc(px + s * 0.86, py + s * 0.0, s * 0.15, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#ffe066'; ctx.beginPath(); ctx.arc(px + s * 0.86, py + s * 0.0, s * 0.08, 0, Math.PI * 2); ctx.fill();
+        } else if (kind === 'melt') {
+            ctx.fillStyle = 'rgba(255,255,255,.55)';
+            [[0.28, 0.86, 0.09], [0.66, 0.92, 0.11]].forEach(([dx, dy, rr]) => {
+                const cx = px + s * dx, cy = py + s * dy;
+                ctx.beginPath(); ctx.moveTo(cx, cy - s * rr * 1.8); ctx.quadraticCurveTo(cx + s * rr, cy - s * rr * 0.2, cx, cy + s * rr * 0.6); ctx.quadraticCurveTo(cx - s * rr, cy - s * rr * 0.2, cx, cy - s * rr * 1.8); ctx.fill();
+            });
+            ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = Math.max(1, s * 0.05);
+            ctx.beginPath(); ctx.moveTo(px + s * 0.18, py + s * 0.18); ctx.lineTo(px + s * 0.3, py + s * 0.12); ctx.stroke();
+        } else if (kind === 'zombie') {
+            ctx.strokeStyle = '#2d3a2d'; ctx.lineWidth = Math.max(1, s * 0.05);
+            ctx.beginPath(); ctx.moveTo(px + s * 0.18, py + s * 0.24); ctx.lineTo(px + s * 0.5, py + s * 0.2);
+            for (let i = 0; i < 3; i++) { const sx = px + s * (0.24 + i * 0.1); ctx.moveTo(sx, py + s * 0.16); ctx.lineTo(sx, py + s * 0.28); }
+            ctx.stroke();
+            ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(px + s * 0.68, py + s * 0.47, s * 0.05, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = '#2d3a2d'; ctx.lineWidth = Math.max(1, s * 0.06);
+            ctx.beginPath(); ctx.moveTo(px + s * 0.35, py + s * 0.74); ctx.lineTo(px + s * 0.45, py + s * 0.7); ctx.lineTo(px + s * 0.55, py + s * 0.74); ctx.lineTo(px + s * 0.65, py + s * 0.7); ctx.stroke();
+        } else if (kind === 'hard') {
+            ctx.fillStyle = '#9aa0b4';
+            ctx.beginPath(); ctx.moveTo(px + s * 0.08, py + s * 0.42); ctx.quadraticCurveTo(px + s * 0.5, py - s * 0.12, px + s * 0.92, py + s * 0.42); ctx.closePath(); ctx.fill();
+            ctx.strokeStyle = '#1e272e'; ctx.lineWidth = Math.max(1, s * 0.05); ctx.stroke();
+            ctx.fillStyle = '#1e272e';
+            [0.3, 0.5, 0.7].forEach((dx) => { ctx.beginPath(); ctx.arc(px + s * dx, py + s * 0.3, s * 0.035, 0, Math.PI * 2); ctx.fill(); });
+        }
+        ctx.restore();
+    }
+
+    drawSlimeBody(ctx, x, y, color, size = this.SIZE, fx = null) {
         const px = x * size;
         const py = y * size;
         const radius = size * 0.3;
@@ -338,7 +423,7 @@ class SlimeTetris {
         for (let r = 0; r < m.length; r++) {
             for (let c = 0; c < m[r].length; c++) {
                 if (m[r][c]) {
-                    this.drawSlimeBlock(this.nextCtx, (offsetX / size) + c, (offsetY / size) + r, this.nextPiece.c, size);
+                    this.drawSlimeBlock(this.nextCtx, (offsetX / size) + c, (offsetY / size) + r, this.nextPiece.c, size, null, (this.nextPiece.k && this.nextPiece.k[r][c]) || '');
                 }
             }
         }
@@ -513,25 +598,28 @@ class SlimeTetris {
 
     rotateInner() {
         const m = this.piece.m;
-        // 順時針旋轉矩陣
+        // 順時針旋轉矩陣（特殊史萊姆標記跟著一起轉）
         const rotated = m[0].map((_, i) => m.map(row => row[i]).reverse());
+        const km = this.piece.k || m.map(row => row.map(() => ''));
+        const rotatedK = km[0].map((_, i) => km.map(row => row[i]).reverse());
+        const apply = () => { this.piece.k = rotatedK; };
         
         // 簡易 Kick 檢測
         let offset = 0;
         if (!this.collide(this.piece.x, this.piece.y, rotated)) {
-            this.piece.m = rotated;
+            this.piece.m = rotated; apply();
             return;
         }
         
         // 嘗試左右微移 (Wall Kick)
         if (!this.collide(this.piece.x - 1, this.piece.y, rotated)) {
             this.piece.x -= 1;
-            this.piece.m = rotated;
+            this.piece.m = rotated; apply();
             return;
         }
         if (!this.collide(this.piece.x + 1, this.piece.y, rotated)) {
             this.piece.x += 1;
-            this.piece.m = rotated;
+            this.piece.m = rotated; apply();
             return;
         }
     }
@@ -562,7 +650,8 @@ class SlimeTetris {
                     const boardY = this.piece.y + y;
                     const boardX = this.piece.x + x;
                     if (boardY >= 0 && boardY < this.ROWS) {
-                        this.board[boardY][boardX] = this.piece.c;
+                        const kind = this.piece.k ? this.piece.k[y][x] : '';
+                        this.board[boardY][boardX] = kind ? `${this.piece.c}|${kind}` : this.piece.c;
                     }
                 }
             });
@@ -570,13 +659,51 @@ class SlimeTetris {
 
         this.triggerSquish();
 
+        // 💧 融化史萊姆：落地後往下滴，填滿正下方的空洞，之後變回一般史萊姆
+        for (let r = this.ROWS - 1; r >= 0; r--) {
+            for (let c = 0; c < this.COLS; c++) {
+                if (SlimeTetris.cellKind(this.board[r][c]) !== 'melt') continue;
+                const color = SlimeTetris.cellColor(this.board[r][c]);
+                this.board[r][c] = 0;
+                let y = r;
+                while (y + 1 < this.ROWS && this.board[y + 1][c] === 0) y++;
+                this.board[y][c] = color;
+                if (y !== r) this.sfx.melt();
+            }
+        }
+
+        // 🛡 硬殼垃圾：滿行時第一次只會「脫殼」——頭盔破掉、剛填進去的缺口重新打開，要再消一次
+        let cracked = false;
+        for (let r = 0; r < this.ROWS; r++) {
+            const row = this.board[r];
+            if (!row.every(cell => cell !== 0) || !row.some(cell => SlimeTetris.cellKind(cell) === 'hard')) continue;
+            for (let c = 0; c < this.COLS; c++) {
+                const cell = row[c];
+                if (SlimeTetris.cellKind(cell) === 'hard') row[c] = '#6b6b80';
+                else if (SlimeTetris.cellColor(cell) !== '#6b6b80') row[c] = 0;
+            }
+            cracked = true;
+        }
+        if (cracked) this.sfx.crack();
+
         // 有滿行 → 先播放消除動畫（史萊姆開心表情 + 閃爍消失），動畫結束才真正消除
         const full = [];
         for (let r = 0; r < this.ROWS; r++) if (this.board[r].every(cell => cell !== 0)) full.push(r);
         if (full.length) {
-            this.clearing = { rows: full, t0: performance.now() };
+            // 結算消除行裡的特殊史萊姆：⭐ 計分 ×2、攻擊 +1；💣 炸掉上下格；🧟 自己加兩行垃圾
+            const mods = { stars: 0, bombs: [], zombies: 0 };
+            full.forEach((r) => this.board[r].forEach((cell, c) => {
+                const k = SlimeTetris.cellKind(cell);
+                if (k === 'star') mods.stars++;
+                else if (k === 'bomb') mods.bombs.push([r, c]);
+                else if (k === 'zombie') mods.zombies++;
+            }));
+            this.clearMods = mods;
+            this.clearing = { rows: full, t0: performance.now(), mods };
             this.piece = null;
             this.sfx.clear(full.length, this.combo + 1);
+            if (mods.bombs.length) this.sfx.bomb();
+            if (mods.zombies) this.sfx.zombie();
             this.spawnParticles(full);
             return;
         }
@@ -591,8 +718,22 @@ class SlimeTetris {
     }
 
     finishClear() {
+        const mods = this.clearMods;
         this.clearing = null;
+        // 💣 炸彈：在整行消失前，先把炸彈正上方、正下方（非消除行）的格子炸掉
+        if (mods && mods.bombs.length) {
+            const rows = new Set();
+            for (let r = 0; r < this.ROWS; r++) if (this.board[r].every(cell => cell !== 0)) rows.add(r);
+            mods.bombs.forEach(([r, c]) => [r - 1, r + 1].forEach((rr) => {
+                if (rr >= 0 && rr < this.ROWS && !rows.has(rr) && this.board[rr][c]) { this.board[rr][c] = 0; mods.blasted = (mods.blasted || 0) + 1; }
+            }));
+        }
         this.clearLines();
+        this.clearMods = null;
+        // 🧟 殭屍：每隻殭屍讓自己底下冒出 2 行垃圾（陷阱）
+        if (mods && mods.zombies) {
+            if (this.addGarbageRows(Math.min(4, mods.zombies * 2), false)) { this.endGame(); return; }
+        }
         this.spawnAndCheck();
     }
 
@@ -608,7 +749,7 @@ class SlimeTetris {
         const now = performance.now();
         rows.forEach((r) => {
             for (let c = 0; c < this.COLS; c++) {
-                const color = this.board[r][c] || '#ffffff';
+                const color = SlimeTetris.cellColor(this.board[r][c]) || '#ffffff';
                 for (let k = 0; k < 2; k++) {
                     this.particles.push({
                         x: (c + 0.5) * this.SIZE, y: (r + 0.5) * this.SIZE,
@@ -636,15 +777,16 @@ class SlimeTetris {
             const baseScores = [0, 100, 300, 500, 800];
             const base = baseScores[cleared] || (cleared * 200);
             
-            // 連擊（Combo）加權：得分 = 基礎得分 × (1 + Combo數 × 0.5)
-            const addScore = base * (1 + this.combo * 0.5);
+            // 連擊（Combo）加權：得分 = 基礎得分 × (1 + Combo數 × 0.5)；⭐ 星星史萊姆 ×2；💣 每炸掉 1 格 +20
+            const mods = this.clearMods || {};
+            const addScore = base * (1 + this.combo * 0.5) * (mods.stars ? 2 : 1) + (mods.blasted || 0) * 20;
             this.score += addScore;
             this.lines += cleared;
             this.combo++;
 
             // 難度遞增：每消除 10 行升 1 Level (最高 10 階)
             this.level = Math.min(10, Math.floor(this.lines / 10) + 1);
-            if (this.opts.onClear) this.opts.onClear(cleared, this.combo);
+            if (this.opts.onClear) this.opts.onClear(cleared, this.combo, { stars: mods.stars || 0 });
         } else {
             this.combo = 0;
         }
@@ -654,10 +796,11 @@ class SlimeTetris {
     }
 
     // ---- PK 攻擊：收到對手的垃圾行 ----
-    queueGarbage(n) {
+    queueGarbage(n, hard = 0) {
         if (this.gameOver || n <= 0) return;
         this.sfx.garbage();
         this.pendingGarbage = Math.min(20, this.pendingGarbage + n);
+        this.pendingHard = Math.min(this.pendingGarbage, this.pendingHard + Math.min(hard, n));
         if (this.opts.onGarbageChange) this.opts.onGarbageChange(this.pendingGarbage);
     }
 
@@ -665,21 +808,28 @@ class SlimeTetris {
     cancelGarbage(attack) {
         const used = Math.min(attack, this.pendingGarbage);
         this.pendingGarbage -= used;
+        this.pendingHard = Math.min(this.pendingHard, this.pendingGarbage);
         if (this.opts.onGarbageChange) this.opts.onGarbageChange(this.pendingGarbage);
         return attack - used;
     }
 
     // 把待收垃圾行從底部推上來（同一批缺口在同一欄）。回傳 true 表示被推出頂端 → 輸
     applyGarbage() {
-        const n = this.pendingGarbage;
-        this.pendingGarbage = 0;
+        const n = this.pendingGarbage, hard = this.pendingHard;
+        this.pendingGarbage = 0; this.pendingHard = 0;
         if (this.opts.onGarbageChange) this.opts.onGarbageChange(0);
+        return this.addGarbageRows(n, hard);
+    }
+
+    // 從底部推上 n 行垃圾（同一批缺口同一欄）；前 hard 行是硬殼。回傳 true 表示被推出頂端
+    addGarbageRows(n, hard = 0) {
         let toppedOut = false;
         const hole = Math.floor(this.garbageRng() * this.COLS);
         for (let i = 0; i < n; i++) {
             const top = this.board.shift();
             if (top.some(cell => cell !== 0)) toppedOut = true;
-            const row = Array(this.COLS).fill('#6b6b80');
+            const isHard = i >= n - (hard || 0);
+            const row = Array(this.COLS).fill(isHard ? '#6b6b80|hard' : '#6b6b80');
             row[hole] = 0;
             this.board.push(row);
         }
@@ -688,7 +838,7 @@ class SlimeTetris {
 
     // 給對手看的精簡盤面（含目前操作中的方塊）
     snapshot() {
-        const grid = this.board.map(row => row.map(c => (c ? (c === '#6b6b80' ? 'g' : 'x') : '.')));
+        const grid = this.board.map(row => row.map(c => (c ? (SlimeTetris.cellColor(c) === '#6b6b80' ? 'g' : 'x') : '.')));
         if (this.piece && !this.gameOver) {
             this.piece.m.forEach((row, y) => row.forEach((v, x) => {
                 const by = this.piece.y + y, bx = this.piece.x + x;
@@ -828,7 +978,7 @@ class SlimeTetris {
             this.piece.m.forEach((row, y) => {
                 row.forEach((val, x) => {
                     if (val) {
-                        this.drawSlimeBlock(this.ctx, rx + x, ry + y, this.piece.c);
+                        this.drawSlimeBlock(this.ctx, rx + x, ry + y, this.piece.c, this.SIZE, null, (this.piece.k && this.piece.k[y][x]) || '');
                     }
                 });
             });

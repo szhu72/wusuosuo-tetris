@@ -53,10 +53,10 @@
             transaction: async (p, fn) => (await db.runTransaction(r(p), fn)).snapshot.val(),
             onDisconnectUpdate: (p, v) => db.onDisconnect(r(p)).update(v),
             cancelOnDisconnect: (p) => db.onDisconnect(r(p)).cancel(),
-            topBest: async (n) => {
-                const s = await db.get(db.query(r('players'), db.orderByChild('best'), db.limitToLast(n)));
+            topBest: async (n, field = 'best') => {
+                const s = await db.get(db.query(r('players'), db.orderByChild(field), db.limitToLast(n)));
                 const list = []; s.forEach((c) => { list.push(c.val()); });
-                return list.filter((p) => p && p.best > 0).sort((a, b) => b.best - a.best);
+                return list.filter((p) => p && p[field] > 0).sort((a, b) => b[field] - a[field]);
             },
         };
     }
@@ -91,7 +91,7 @@
             transaction: async (p, fn) => { const t = read(); const cur = getAt(t, p); const nv = fn(cur === undefined ? null : cur); if (nv !== undefined) { setAt(t, p, sv(nv)); write(t); } return getAt(read(), p) ?? null; },
             onDisconnectUpdate: async (p, v) => { discUpdates.push([p, Object.fromEntries(Object.entries(v).map(([k, val]) => [k, typeof val === 'object' ? '__now__' : val]))]); },
             cancelOnDisconnect: async () => { discUpdates.length = 0; },
-            topBest: async (n) => Object.values(read().players || {}).filter((p) => p && p.best > 0).sort((a, b) => b.best - a.best).slice(0, n),
+            topBest: async (n, field = 'best') => Object.values(read().players || {}).filter((p) => p && p[field] > 0).sort((a, b) => b[field] - a[field]).slice(0, n),
         };
     }
 
@@ -119,6 +119,11 @@
           <div class="pk-card">
             <h2 class="pk-title">史萊姆方塊 <span>Q彈大冒險</span></h2>
             <div id="pk-me" class="pk-me"></div>
+            <div class="pk-variant" id="pk-variant">
+              <button data-v="classic">🎮 經典模式</button>
+              <button data-v="special">✨ 特殊史萊姆</button>
+            </div>
+            <p class="pk-hint pk-variant-hint" id="pk-variant-hint"></p>
             <button id="pk-single" class="ui-btn primary pk-big">🎮 單人遊戲</button>
             <div id="pk-online" class="pk-section">
               <h3>⚔ 1 對 1 PK</h3>
@@ -138,12 +143,17 @@
             <p id="pk-status" class="pk-status"></p>
             <div class="pk-rank">
               <h3>🏆 排行榜 TOP 10</h3>
+              <div class="pk-rank-tabs" id="pk-rank-tabs"><button data-v="classic" class="on">經典</button><button data-v="special">特殊史萊姆</button></div>
               <div class="pk-rank-viewport"><ol id="pk-rank-list" class="pk-rank-list"><li class="pk-hint">載入中…</li></ol></div>
             </div>
           </div>
           <div class="pk-card hidden" id="pk-room">
             <h3>房間 <b id="pk-room-code" class="pk-roomcode"></b></h3>
             <p class="pk-hint" id="pk-room-mode"></p>
+            <div class="pk-variant pk-room-variant" id="pk-room-variant">
+              <button data-v="classic">🎮 經典</button>
+              <button data-v="special">✨ 特殊史萊姆</button>
+            </div>
             <button id="pk-share" class="ui-btn primary">📨 邀請好友</button>
             <ul id="pk-players" class="pk-players"></ul>
             <button id="pk-ready" class="ui-btn primary pk-big">準備</button>
@@ -195,7 +205,8 @@
         $('#pk-me').innerHTML = `
           <div><b>${esc(me.name || '尚未命名')}</b> <span class="pk-tag">#${esc(me.code)}</span>
             <button id="pk-rename" class="pk-link">✎ 改名</button></div>
-          <div class="pk-hint">最佳 ${me.best || 0} 分 · ${me.wins || 0} 勝 ${me.losses || 0} 敗${me.draws ? ` ${me.draws} 和` : ''}</div>`;
+          <div class="pk-hint">經典：最佳 ${me.best || 0} 分 · ${me.wins || 0} 勝 ${me.losses || 0} 敗${me.draws ? ` ${me.draws} 和` : ''}</div>
+          <div class="pk-hint">特殊：最佳 ${me.bestSp || 0} 分 · ${me.winsSp || 0} 勝 ${me.lossesSp || 0} 敗${me.drawsSp ? ` ${me.drawsSp} 和` : ''}</div>`;
         $('#pk-rename').onclick = () => askName(true);
     }
 
@@ -225,6 +236,11 @@
         });
     }
 
+    // 玩法：經典（classic）/ 特殊史萊姆（special）。兩種的成績、勝敗、排行榜完全分開統計
+    let variant = (() => { try { return localStorage.getItem('slime_variant') === 'special' ? 'special' : 'classic'; } catch { return 'classic'; } })();
+    const sfxKey = (special) => (special ? 'Sp' : '');          // 欄位後綴：best / bestSp、wins / winsSp…
+    const variantName = (special) => (special ? '特殊史萊姆' : '經典');
+    const SPECIAL_HELP = '⭐ 星星：該次消除分數 ×2、攻擊 +1　💣 炸彈：連同上下格一起炸掉　💧 融化：落地往下滴補洞　🧟 殭屍：消除時自己冒出 2 行垃圾（陷阱）　🛡 硬殼垃圾（PK）：要消 2 次';
     let selMode = { mode: 'timed', duration: 180 };
     function modeText(m) { return m.mode === 'survival' ? '生存 PK：不限時間，先堆到頂的人輸，每 40 秒自動加速。' : `計時 PK：${m.duration / 60} 分鐘內消除行數多的人贏；中途有人堆到頂就直接判輸、提早結束。`; }
 
@@ -238,7 +254,7 @@
             if (!(await net.get(`rooms/${code}/host`))) break;
         }
         await net.set(`rooms/${code}`, {
-            host: me.uid, mode: selMode.mode, duration: selMode.duration, status: 'waiting', createdAt: SERVER_TIME,
+            host: me.uid, mode: selMode.mode, duration: selMode.duration, special: variant === 'special', status: 'waiting', createdAt: SERVER_TIME,
             players: { [me.uid]: { name: me.name, code: me.code, ready: false, online: true, joinedAt: SERVER_TIME } },
         });
         await enterRoom(code);
@@ -286,7 +302,12 @@
     function renderRoom() {
         const r = room;
         $('#pk-room-code').textContent = roomCode;
-        $('#pk-room-mode').textContent = modeText(r);
+        $('#pk-room-mode').textContent = `${modeText(r)}${r.special ? '\n✨ 特殊史萊姆模式：' + SPECIAL_HELP : '\n🎮 經典模式：沒有特殊史萊姆。'}`;
+        const canSwitch = r.host === me.uid && r.status !== 'playing';
+        document.querySelectorAll('#pk-room-variant button').forEach((b) => {
+            b.classList.toggle('on', (b.dataset.v === 'special') === !!r.special);
+            b.disabled = !canSwitch;
+        });
         const ps = Object.entries(r.players || {}).sort((a, b) => (a[1].joinedAt || 0) - (b[1].joinedAt || 0));
         $('#pk-players').innerHTML = ps.map(([uid, p]) => `
             <li class="${p.online === false ? 'off' : ''}">
@@ -340,7 +361,7 @@
     }
 
     function beginMatch(r) {
-        match = { seed: r.seed, startAt: r.startAt, mode: r.mode, duration: r.duration, matchId: r.matchId, processed: new Set(), resolved: false };
+        match = { seed: r.seed, startAt: r.startAt, mode: r.mode, duration: r.duration, special: !!r.special, matchId: r.matchId, processed: new Set(), resolved: false };
         show('pk-lobby', false);
         show('pk-panel', true);
         document.body.classList.add('pk-mode');
@@ -383,13 +404,16 @@
     function startGame() {
         game = new SlimeTetris({
             seed: match.seed,
+            special: !!match.special,
             pvp: true,
             minLevel: () => (match.mode === 'survival' ? 1 + Math.floor(Math.max(0, net.now() - match.startAt) / SURVIVAL_SPEEDUP_MS) : 1),
-            onClear: (cleared, combo) => {
-                let atk = (ATTACK_BY_LINES[cleared] ?? cleared) + (COMBO_BONUS[Math.min(combo - 1, COMBO_BONUS.length - 1)] || 0);
+            onClear: (cleared, combo, extra = {}) => {
+                let atk = (ATTACK_BY_LINES[cleared] ?? cleared) + (COMBO_BONUS[Math.min(combo - 1, COMBO_BONUS.length - 1)] || 0) + (extra.stars || 0);
                 atk = game.cancelGarbage(atk);
                 if (atk > 0 && !match.resolved) {
-                    net.push(`rooms/${roomCode}/attacks`, { from: me.uid, n: atk, t: SERVER_TIME });
+                    // 特殊模式：一次送出 2 行以上時，最底下那行是 🛡 硬殼垃圾（要消 2 次）
+                    const hard = match.special && atk >= 2 ? 1 : 0;
+                    net.push(`rooms/${roomCode}/attacks`, { from: me.uid, n: atk, hard, t: SERVER_TIME });
                     flash(`⚔ 攻擊 +${atk}`);
                     game.sfx.attack();
                 }
@@ -419,7 +443,7 @@
             if (match.processed.has(id)) return;
             match.processed.add(id);
             const a = atks[id];
-            if (a && a.from !== me.uid && !match.resolved) { game.queueGarbage(a.n); flash(`💥 收到 ${a.n} 行垃圾`); }
+            if (a && a.from !== me.uid && !match.resolved) { game.queueGarbage(a.n, a.hard || 0); flash(`💥 收到 ${a.n} 行垃圾${a.hard ? '（含硬殼）' : ''}`); }
         });
     }
 
@@ -504,14 +528,16 @@
         const myScore = game ? Math.floor(game.score) : 0;
         const outcome = result.draw ? 'draw' : result.winner === me.uid ? 'win' : 'loss';
         // 戰績 + 個人最佳（只在超過舊紀錄時更新）
-        const isPB = myScore > (me.best || 0);
-        const statKey = outcome === 'win' ? 'wins' : outcome === 'loss' ? 'losses' : 'draws';
+        const sx = sfxKey(match.special);
+        const bestKey = 'best' + sx;
+        const isPB = myScore > (me[bestKey] || 0);
+        const statKey = (outcome === 'win' ? 'wins' : outcome === 'loss' ? 'losses' : 'draws') + sx;
         const doneKey = `pk_counted_${roomCode}_${result.matchId}`;
         if (!sessionStorage.getItem(doneKey)) {
             sessionStorage.setItem(doneKey, '1');
             me[statKey] = (me[statKey] || 0) + 1;
             const upd = { [statKey]: me[statKey], name: me.name, code: me.code, updatedAt: SERVER_TIME };
-            if (isPB) { me.best = myScore; upd.best = myScore; }
+            if (isPB) { me[bestKey] = myScore; upd[bestKey] = myScore; }
             await net.update(`players/${me.uid}`, upd);
         }
 
@@ -527,7 +553,7 @@
             <tr class="me"><td>${esc(me.name)}</td><td>${mine.lines || 0}</td><td>${mine.score || 0}</td></tr>
             <tr><td>${esc(theirs.name || '對手')}</td><td>${theirs.lines || 0}</td><td>${theirs.score || 0}</td></tr>
           </table>
-          ${isPB ? `<p class="pk-pb">🎉 新個人紀錄 ${myScore} 分！已更新排行榜</p>` : `<p class="pk-hint">個人最佳：${me.best || 0} 分</p>`}
+          ${isPB ? `<p class="pk-pb">🎉 新個人紀錄 ${myScore} 分！已更新「${variantName(match.special)}」排行榜</p>` : `<p class="pk-hint">${variantName(match.special)}模式個人最佳：${me[bestKey] || 0} 分</p>`}
           <button id="pk-again" class="ui-btn primary pk-big">↻ 回房間再來一局</button>
           <button id="pk-tolobby" class="ui-btn pk-ghost">離開房間</button>`;
         show('pk-result', true);
@@ -551,7 +577,10 @@
     function startSingle() {
         show('pk-lobby', false);
         show('pk-menu-btn', true);
+        const special = variant === 'special';
+        const bestKey = 'best' + sfxKey(special);
         game = new SlimeTetris(net && me ? {
+            special,
             onGameOver: async (g) => {
                 const score = Math.floor(g.score);
                 document.getElementById('final-score-text').innerText = '得分: ' + score;
@@ -559,29 +588,31 @@
                 if (ig) ig.classList.add('hidden');
                 let note = document.getElementById('pk-single-pb');
                 if (!note) { note = document.createElement('p'); note.id = 'pk-single-pb'; note.className = 'pk-pb'; document.getElementById('final-score-text').after(note); }
-                if (score > (me.best || 0)) {
-                    me.best = score;
-                    await net.update(`players/${me.uid}`, { best: score, name: me.name, code: me.code, updatedAt: SERVER_TIME });
-                    note.textContent = `🎉 新個人紀錄！已更新排行榜`;
-                    g.loadLeaderboard();
-                } else note.textContent = `個人最佳：${me.best || 0} 分`;
+                if (score > (me[bestKey] || 0)) {
+                    me[bestKey] = score;
+                    await net.update(`players/${me.uid}`, { [bestKey]: score, name: me.name, code: me.code, updatedAt: SERVER_TIME });
+                    note.textContent = `🎉 新個人紀錄！已更新「${variantName(special)}」排行榜`;
+                } else note.textContent = `${variantName(special)}模式個人最佳：${me[bestKey] || 0} 分`;
                 document.getElementById('game-overlay').classList.remove('hidden');
             },
-        } : {});
+        } : { special });
         window.__game = game;
     }
 
     // ------------------------------------------------------------------
     //  首頁排行榜 TOP 10（自動輪播捲動）
     // ------------------------------------------------------------------
+    let rankVariant = variant;
     async function loadRanking() {
         const ol = $('#pk-rank-list');
         if (!ol) return;
+        document.querySelectorAll('#pk-rank-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.v === rankVariant));
+        const field = 'best' + sfxKey(rankVariant === 'special');
         let list = [];
-        try { list = net ? await net.topBest(10) : []; } catch (e) { console.warn(e); }
+        try { list = net ? await net.topBest(10, field) : []; } catch (e) { console.warn(e); }
         if (!list.length) { ol.innerHTML = `<li class="pk-hint">${net ? '還沒有紀錄，來當第一名吧！' : 'PK 連線啟用後顯示'}</li>`; ol.classList.remove('pk-rolling'); return; }
         const medal = (i) => ['🥇', '🥈', '🥉'][i] || `${i + 1}.`;
-        const row = (p, i) => `<li class="${me && p.code === me.code ? 'me' : ''}"><span>${medal(i)} ${esc(p.name)} <span class="pk-tag">#${esc(p.code || '')}</span></span><b>${p.best}</b></li>`;
+        const row = (p, i) => `<li class="${me && p.code === me.code ? 'me' : ''}"><span>${medal(i)} ${esc(p.name)} <span class="pk-tag">#${esc(p.code || '')}</span></span><b>${p[field]}</b></li>`;
         const html = list.map(row).join('');
         // 超過 5 名時複製一份清單，做成無縫循環捲動
         if (list.length > 5) {
@@ -603,6 +634,25 @@
         const cfg = window.FIREBASE_CONFIG;
 
         $('#pk-single').onclick = startSingle;
+        const renderVariant = () => {
+            document.querySelectorAll('#pk-variant button').forEach((b) => b.classList.toggle('on', b.dataset.v === variant));
+            $('#pk-variant-hint').textContent = variant === 'special'
+                ? '✨ ' + SPECIAL_HELP + '。成績與排行榜和經典模式分開計算。'
+                : '🎮 經典模式：純粹比消除技術，沒有特殊史萊姆。';
+            $('#pk-single').textContent = variant === 'special' ? '✨ 單人遊戲（特殊史萊姆）' : '🎮 單人遊戲（經典）';
+        };
+        document.querySelectorAll('#pk-variant button').forEach((b) => b.onclick = () => {
+            variant = b.dataset.v;
+            try { localStorage.setItem('slime_variant', variant); } catch {}
+            renderVariant();
+            rankVariant = variant; loadRanking();
+        });
+        renderVariant();
+        document.querySelectorAll('#pk-rank-tabs button').forEach((b) => b.onclick = () => { rankVariant = b.dataset.v; loadRanking(); });
+        document.querySelectorAll('#pk-room-variant button').forEach((b) => b.onclick = () => {
+            if (!room || room.host !== me.uid || room.status === 'playing') return;
+            net.update(`rooms/${roomCode}`, { special: b.dataset.v === 'special' });
+        });
         document.querySelectorAll('#pk-modes button').forEach((b) => b.onclick = () => {
             document.querySelectorAll('#pk-modes button').forEach((x) => x.classList.remove('on'));
             b.classList.add('on');
@@ -628,7 +678,8 @@
             return;
         }
         const saved = (await net.get(`players/${net.uid}`)) || {};
-        me = { uid: net.uid, code: shortCode(net.uid), name: saved.name || '', best: saved.best || 0, wins: saved.wins || 0, losses: saved.losses || 0, draws: saved.draws || 0 };
+        me = { uid: net.uid, code: shortCode(net.uid), name: saved.name || '' };
+        ['best', 'wins', 'losses', 'draws'].forEach((k) => { me[k] = saved[k] || 0; me[k + 'Sp'] = saved[k + 'Sp'] || 0; });
         renderMe();
         status('');
         const namePromise = askName(false);

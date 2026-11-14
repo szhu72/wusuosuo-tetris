@@ -5,7 +5,8 @@
     "players": {
       ".read": "auth != null",
       ".indexOn": [
-        "best"
+        "best",
+        "bestSp"
       ],
       "$uid": {
         ".write": "auth != null && auth.uid === $uid",
@@ -29,6 +30,18 @@
         },
         "updatedAt": {
           ".validate": "newData.isNumber()"
+        },
+        "bestSp": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9999999"
+        },
+        "winsSp": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        "lossesSp": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        "drawsSp": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
         },
         "$other": {
           ".validate": false
@@ -61,6 +74,9 @@
         },
         "guest": {
           ".validate": "newData.isString() && newData.val() !== newData.parent().child('host').val()"
+        },
+        "special": {
+          ".validate": "newData.isBoolean()"
         }
       }
     }

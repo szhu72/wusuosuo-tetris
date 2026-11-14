@@ -83,3 +83,17 @@ body.pk-mode .sidebar { gap: 6px; }
 .pk-rank-viewport:hover .pk-rank-list, .pk-rank-viewport:active .pk-rank-list { animation-play-state: paused; }
 @keyframes pk-rank-roll { from { transform: translateY(0); } to { transform: translateY(-50%); } }
 @media (prefers-reduced-motion: reduce) { .pk-rank-list.pk-rolling { animation: none; } .pk-rank-viewport { overflow-y: auto; } }
+
+/* 經典 / 特殊史萊姆 切換 */
+.pk-variant { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pk-variant button, .pk-rank-tabs button { padding: 8px 4px; border-radius: 6px; border: 1px solid #3d3d6b; background: #252545; color: #dcdde1; font-size: 13px; cursor: pointer; }
+.pk-variant button.on { background: #feca57; color: #121224; border-color: #feca57; font-weight: bold; }
+.pk-variant button[data-v="classic"].on { background: #4ecca3; border-color: #4ecca3; }
+.pk-variant button:disabled { opacity: .75; cursor: default; }
+.pk-variant-hint { min-height: 1.5em; }
+.pk-room-variant { margin-top: -2px; }
+#pk-room-mode { white-space: pre-line; }
+.pk-rank-tabs { display: flex; gap: 6px; margin-bottom: 6px; }
+.pk-rank-tabs button { padding: 4px 10px; font-size: 12px; }
+.pk-rank-tabs button.on { background: #4ecca3; color: #121224; border-color: #4ecca3; font-weight: bold; }
+.pk-rank-tabs button[data-v="special"].on { background: #feca57; border-color: #feca57; }
