@@ -91,6 +91,7 @@ class SlimeSFX {
         }
     }
     land() { this.tone(180, 0.07, { type: 'sine', vol: 0.09, slide: 0.6 }); }
+    levelUp() { [659.25, 880, 1174.7].forEach((f, i) => this.tone(f, 0.12, { type: 'square', vol: 0.06, delay: i * 0.07 })); }
     bomb() { this.tone(90, 0.35, { type: 'sawtooth', vol: 0.14, slide: 0.4 }); this.tone(60, 0.4, { type: 'square', vol: 0.06, slide: 0.5, delay: 0.03 }); }
     melt() { this.tone(900, 0.14, { type: 'sine', vol: 0.08, slide: 0.45 }); }
     zombie() { [196, 185, 174.6].forEach((f, i) => this.tone(f, 0.22, { type: 'sawtooth', vol: 0.06, delay: i * 0.12 })); }
@@ -140,7 +141,15 @@ class SlimeTetris {
         this.sfx = window.__slimeSfx || (window.__slimeSfx = new SlimeSFX());
         // 方向鍵長按：鍵盤 / 觸控分開設定（DAS＝開始連續移動前的等待，ARR＝之後每格間隔，毫秒）
         this.TIMING = { key: { das: 150, arr: 55 }, touch: { das: 170, arr: 70 }, soft: { das: 80, arr: 40 } };
-        this.LOCK_DELAY = 450;         // 方塊著地後還能移動/旋轉的時間（毫秒）
+        this.LOCK_DELAY = 450;
+        // 街機式「越玩越快」：最高 15 級；每 6 行升 1 級，或每 45 秒自動升 1 級（取較高者）
+        this.MAX_LEVEL = 15;
+        this.LINES_PER_LEVEL = 6;
+        this.TIME_PER_LEVEL = 45000;
+        this.SPEED_TABLE = [1000, 850, 720, 610, 520, 440, 370, 310, 260, 215, 175, 140, 110, 85, 65]; // 每格下落毫秒
+        this.playMs = 0;               // 實際遊玩時間（不含暫停）
+        this.shownLevel = 1;
+        this.levelUpAt = 0;         // 方塊著地後還能移動/旋轉的時間（毫秒）
         this.lockTimer = 0; this.lockResets = 0;
         this.render = null;            // 畫面上的平滑位置（往實際格子位置補間）
         this.landFx = null;            // 落地疊疊樂彈跳效果
@@ -456,10 +465,16 @@ class SlimeTetris {
         }
         this.updateHeldInput(time);
         this.dropCounter += deltaTime;
+        this.playMs += Math.min(deltaTime, 100);
 
-        // 10 階段難度遞減 (Level 1: 1000ms -> Level 10: 100ms)
-        const effLevel = Math.max(this.level, this.opts.minLevel ? this.opts.minLevel() : 1);
-        const speed = Math.max(100, 1000 - (effLevel - 1) * 100);
+        const effLevel = this.currentLevel();
+        if (effLevel > this.shownLevel) {          // 升級提示：音效 + 畫面閃字
+            this.shownLevel = effLevel;
+            this.levelUpAt = performance.now();
+            this.sfx.levelUp();
+            this.updateUI();
+        }
+        const speed = this.SPEED_TABLE[effLevel - 1];
 
         if (this.dropCounter > speed) {
             this.softDropStep();
@@ -470,7 +485,7 @@ class SlimeTetris {
         if (this.piece && !this.clearing) {
             if (this.collide(this.piece.x, this.piece.y + 1, this.piece.m)) {
                 this.lockTimer += deltaTime;
-                if (this.lockTimer >= this.LOCK_DELAY) this.lock();
+                if (this.lockTimer >= this.lockDelay()) this.lock();
             } else {
                 this.lockTimer = 0;
             }
@@ -479,6 +494,20 @@ class SlimeTetris {
 
         this.draw();
         requestAnimationFrame(this.gameLoop.bind(this));
+    }
+
+    // 目前等級：消行數、遊玩時間、（PK 生存）外部指定的最低等級，三者取最高
+    currentLevel() {
+        const byLines = 1 + Math.floor(this.lines / this.LINES_PER_LEVEL);
+        const byTime = this.opts.pvp ? 1 : 1 + Math.floor(this.playMs / this.TIME_PER_LEVEL);
+        const ext = this.opts.minLevel ? this.opts.minLevel() : 1;
+        return Math.min(this.MAX_LEVEL, Math.max(byLines, byTime, ext));
+    }
+
+    // 等級越高，著地後可微調的時間越短，維持壓迫感
+    lockDelay() {
+        const lv = this.currentLevel();
+        return lv >= 13 ? 170 : lv >= 10 ? 220 : lv >= 6 ? 300 : this.LOCK_DELAY;
     }
 
     togglePause(force) {
@@ -785,7 +814,7 @@ class SlimeTetris {
             this.combo++;
 
             // 難度遞增：每消除 10 行升 1 Level (最高 10 階)
-            this.level = Math.min(10, Math.floor(this.lines / 10) + 1);
+            this.level = this.currentLevel();
             if (this.opts.onClear) this.opts.onClear(cleared, this.combo, { stars: mods.stars || 0 });
         } else {
             this.combo = 0;
@@ -856,7 +885,7 @@ class SlimeTetris {
 
     updateUI() {
         document.getElementById('score-val').innerText = Math.floor(this.score);
-        document.getElementById('level-val').innerText = this.level;
+        document.getElementById('level-val').innerText = this.currentLevel();
         document.getElementById('lines-val').innerText = this.lines;
         document.getElementById('combo-val').innerText = this.combo;
     }
@@ -987,6 +1016,18 @@ class SlimeTetris {
         this.ctx.restore();
 
         this.lastDrawAt = now;
+
+        // LEVEL UP 提示（約 0.9 秒）
+        if (this.levelUpAt && now - this.levelUpAt < 900 && !this.gameOver) {
+            const t = (now - this.levelUpAt) / 900;
+            this.ctx.save();
+            this.ctx.globalAlpha = 1 - t;
+            this.ctx.fillStyle = '#feca57';
+            this.ctx.font = `bold ${20 + 6 * Math.sin(Math.min(1, t * 3) * Math.PI)}px sans-serif`;
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText(`LEVEL ${this.shownLevel}`, this.W / 2, this.H * 0.32 - t * 20);
+            this.ctx.restore();
+        }
 
         if (this.paused && !this.gameOver) {
             this.ctx.fillStyle = 'rgba(9, 9, 20, 0.72)';
