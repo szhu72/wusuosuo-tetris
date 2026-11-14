@@ -291,3 +291,12 @@ body { min-height: 100vh; min-height: 100dvh; align-items: stretch; }
 }
 .game-header { position: relative; }
 .touch-btn.pressed { transform: translateY(3px); box-shadow: 0 1px 0 #181830; background: #3b3b66; }
+
+/* ===== 版面精簡：排行榜移到首頁、預覽縮小、盤面放大 ===== */
+.leaderboard-panel { display: none !important; }
+.sidebar { max-width: 118px; gap: 6px; }
+.next-box { padding: 3px; }
+#next-canvas { width: 54px; height: 54px; }
+.panel { padding: 6px 8px; }
+.stat-item { font-size: 10px; }
+.stat-item .val { font-size: 12px; }

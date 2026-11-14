@@ -128,7 +128,11 @@ class SlimeTetris {
         this.pendingGarbage = 0;   // 待收的垃圾行
         this.sfx = window.__slimeSfx || (window.__slimeSfx = new SlimeSFX());
         // 方向鍵長按：鍵盤 / 觸控分開設定（DAS＝開始連續移動前的等待，ARR＝之後每格間隔，毫秒）
-        this.TIMING = { key: { das: 130, arr: 40 }, touch: { das: 160, arr: 60 }, soft: { das: 90, arr: 35 } };
+        this.TIMING = { key: { das: 150, arr: 55 }, touch: { das: 170, arr: 70 }, soft: { das: 80, arr: 40 } };
+        this.LOCK_DELAY = 450;         // 方塊著地後還能移動/旋轉的時間（毫秒）
+        this.lockTimer = 0; this.lockResets = 0;
+        this.render = null;            // 畫面上的平滑位置（往實際格子位置補間）
+        this.landFx = null;            // 落地疊疊樂彈跳效果
         this.input = { dir: 0, dirSrc: 'key', dirStart: 0, dirMoves: 0, held: { '-1': false, '1': false }, soft: false, softStart: 0, softMoves: 0 };
         this.clearing = null;          // 消除動畫進行中
         this.CLEAR_MS = 360;
@@ -245,6 +249,10 @@ class SlimeTetris {
                 const cx = px + size / 2, cy = py + size / 2;
                 ctx.translate(cx, cy); ctx.scale(fx.scale, fx.scale); ctx.translate(-cx, -cy);
             }
+            if (fx.scaleX !== undefined) {
+                const cx = px + size / 2, cy = fx.anchor === 'bottom' ? py + size : py + size / 2;
+                ctx.translate(cx, cy); ctx.scale(fx.scaleX, fx.scaleY); ctx.translate(-cx, -cy);
+            }
         }
         
         // 主體圓角矩形 (Q彈史萊姆身軀)
@@ -337,8 +345,12 @@ class SlimeTetris {
     }
 
     triggerSquish() {
-        this.squishFactor = 0.85; // 垂直擠壓 15%
-        this.squishTimer = 6;      // 持續約 6 幀
+        // 改為「疊疊樂」效果：只有剛落下的史萊姆與正下方被壓到的史萊姆 Q 彈變形，整個盤面不再晃動
+        if (!this.piece) return;
+        const landed = new Set(), under = new Set();
+        this.piece.m.forEach((row, y) => row.forEach((v, x) => { if (v) landed.add(`${this.piece.x + x},${this.piece.y + y}`); }));
+        landed.forEach((k) => { const [x, y] = k.split(',').map(Number); for (let d = 1; d <= 2; d++) { const kk = `${x},${y + d}`; if (!landed.has(kk)) under.add(kk + ':' + d); } });
+        this.landFx = { landed, under, t0: performance.now() };
     }
 
     gameLoop(time = 0) {
@@ -369,13 +381,16 @@ class SlimeTetris {
             this.dropCounter = 0;
         }
 
-        // 動態擠壓復原動畫
-        if (this.squishTimer > 0) {
-            this.squishTimer--;
-            if (this.squishTimer === 0) {
-                this.squishFactor = 1.0;
+        // 著地延遲：碰到地面後等 LOCK_DELAY 才鎖定，期間可左右移動或旋轉微調
+        if (this.piece && !this.clearing) {
+            if (this.collide(this.piece.x, this.piece.y + 1, this.piece.m)) {
+                this.lockTimer += deltaTime;
+                if (this.lockTimer >= this.LOCK_DELAY) this.lock();
+            } else {
+                this.lockTimer = 0;
             }
         }
+
 
         this.draw();
         requestAnimationFrame(this.gameLoop.bind(this));
@@ -448,9 +463,7 @@ class SlimeTetris {
 
     softDropStep() {
         if (!this.piece) return;
-        if (!this.move(0, 1)) {
-            this.lock();
-        }
+        this.move(0, 1);   // 著地時不立即鎖定，交給著地延遲處理
     }
 
     softDropManual() {
@@ -482,12 +495,23 @@ class SlimeTetris {
         }
         this.piece.x += dx;
         this.piece.y += dy;
+        if (dx) this.onPieceAdjusted();
         return true;
+    }
+
+    onPieceAdjusted() {
+        // 著地後移動/旋轉會重設著地計時（最多 15 次，避免無限拖延）
+        if (this.lockTimer > 0 && this.lockResets < 15) { this.lockTimer = 0; this.lockResets++; }
     }
 
     rotate() {
         if (this.gameOver || !this.piece || this.paused) return;
-        this.sfx.rotate();
+        const before = this.piece.m;
+        this.rotateInner();
+        if (this.piece && this.piece.m !== before) { this.sfx.rotate(); this.onPieceAdjusted(); }
+    }
+
+    rotateInner() {
         const m = this.piece.m;
         // 順時針旋轉矩陣
         const rotated = m[0].map((_, i) => m.map(row => row[i]).reverse());
@@ -574,6 +598,7 @@ class SlimeTetris {
 
     spawnAndCheck() {
         this.piece = this.spawnNext();
+        this.lockTimer = 0; this.lockResets = 0; this.render = null;
         if (this.collide(this.piece.x, this.piece.y, this.piece.m)) {
             this.endGame();
         }
@@ -692,12 +717,6 @@ class SlimeTetris {
 
         this.ctx.save();
         
-        // 落地輕微 Squish 擠壓繪製效果
-        if (this.squishFactor !== 1.0) {
-            this.ctx.translate(0, this.H);
-            this.ctx.scale(1.0, this.squishFactor);
-            this.ctx.translate(0, -this.H);
-        }
 
         // 繪製背景網格底色
         this.ctx.fillStyle = '#090914';
@@ -719,7 +738,21 @@ class SlimeTetris {
 
         // 繪製固定於盤面上的史萊姆
         const now = performance.now();
+        this.lastDrawAtPrev = this.lastDrawAt;
         const clr = this.clearing;
+        // 疊疊樂落地效果（約 260ms）：剛落下的史萊姆橫向壓扁再彈回，下面一兩層跟著輕輕被壓
+        const lf = this.landFx && now - this.landFx.t0 < 260 ? this.landFx : null;
+        const landScale = (key) => {
+            if (!lf) return null;
+            const t = (now - lf.t0) / 260;
+            const wobble = Math.sin(t * Math.PI * 2.2) * Math.pow(1 - t, 1.6);
+            let amp = 0;
+            if (lf.landed.has(key)) amp = 0.16;
+            else if (lf.under.has(key + ':1')) amp = 0.08;
+            else if (lf.under.has(key + ':2')) amp = 0.04;
+            if (!amp) return null;
+            return { scaleX: 1 + amp * wobble, scaleY: 1 - amp * wobble, anchor: 'bottom' };
+        };
         const p = clr ? Math.min(1, (now - clr.t0) / this.CLEAR_MS) : 0;
         for (let r = 0; r < this.ROWS; r++) {
             const isClearing = clr && clr.rows.includes(r);
@@ -733,7 +766,7 @@ class SlimeTetris {
                     const scale = q > 0 ? (q < 0.25 ? 1 + q * 0.6 : Math.max(0, 1.15 - (q - 0.25) * 1.55)) : 1 + Math.sin(p * Math.PI * 6) * 0.04;
                     this.drawSlimeBlock(this.ctx, c, r, this.board[r][c], this.SIZE, { face: 'happy', flash, scale, alpha: 1 - q * 0.9 });
                 } else {
-                    this.drawSlimeBlock(this.ctx, c, r, this.board[r][c]);
+                    this.drawSlimeBlock(this.ctx, c, r, this.board[r][c], this.SIZE, landScale(`${c},${r}`));
                 }
             }
         }
@@ -779,18 +812,31 @@ class SlimeTetris {
             }
         }
 
-        // 繪製目前操作中的史萊姆
+        // 繪製目前操作中的史萊姆（畫面位置平滑補間到實際格子，移動不再一格一格跳）
         if (this.piece) {
+            const dt = this.lastDrawAt ? Math.min(50, now - this.lastDrawAt) : 16;
+            if (!this.render || this.render.piece !== this.piece || Math.abs(this.render.x - this.piece.x) > 3 || Math.abs(this.render.y - this.piece.y) > 3) {
+                this.render = { piece: this.piece, x: this.piece.x, y: this.piece.y };
+            } else {
+                const k = 1 - Math.exp(-dt / 22);
+                this.render.x += (this.piece.x - this.render.x) * k;
+                this.render.y += (this.piece.y - this.render.y) * k;
+                if (Math.abs(this.render.x - this.piece.x) < 0.01) this.render.x = this.piece.x;
+                if (Math.abs(this.render.y - this.piece.y) < 0.01) this.render.y = this.piece.y;
+            }
+            const rx = this.render.x, ry = this.render.y;
             this.piece.m.forEach((row, y) => {
                 row.forEach((val, x) => {
                     if (val) {
-                        this.drawSlimeBlock(this.ctx, this.piece.x + x, this.piece.y + y, this.piece.c);
+                        this.drawSlimeBlock(this.ctx, rx + x, ry + y, this.piece.c);
                     }
                 });
             });
         }
 
         this.ctx.restore();
+
+        this.lastDrawAt = now;
 
         if (this.paused && !this.gameOver) {
             this.ctx.fillStyle = 'rgba(9, 9, 20, 0.72)';
@@ -815,6 +861,7 @@ class SlimeTetris {
 
     async loadLeaderboard() {
         const listUl = document.getElementById('leaderboard-list');
+        if (!listUl) return;
         const scores = await LeaderboardAPI.fetchTopScores();
         this.renderLeaderboardUI(scores);
     }
@@ -970,7 +1017,7 @@ window.addEventListener('DOMContentLoaded', () => {
         const side = document.querySelector('.sidebar');
         if (!main || !wrap) return;
         const border = 8; // 外框 4px x 2
-        const maxW = main.clientWidth * 0.62;
+        const maxW = main.clientWidth * 0.70;
         const maxH = main.clientHeight;
         const inner = Math.max(120, Math.floor(Math.min(maxW - border, (maxH - border) / 2)));
         wrap.style.width = (inner + border) + 'px';

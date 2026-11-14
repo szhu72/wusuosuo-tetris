@@ -136,6 +136,10 @@
               </div>
             </div>
             <p id="pk-status" class="pk-status"></p>
+            <div class="pk-rank">
+              <h3>🏆 排行榜 TOP 10</h3>
+              <div class="pk-rank-viewport"><ol id="pk-rank-list" class="pk-rank-list"><li class="pk-hint">載入中…</li></ol></div>
+            </div>
           </div>
           <div class="pk-card hidden" id="pk-room">
             <h3>房間 <b id="pk-room-code" class="pk-roomcode"></b></h3>
@@ -159,8 +163,7 @@
           <div class="stat-item"><span>行數</span><span class="val" id="pk-opp-lines">0</span></div>
           <div class="stat-item"><span>分數</span><span class="val" id="pk-opp-score">0</span></div>
           <div class="pk-garbage"><span>來襲</span><i id="pk-garbage-bar"></i><b id="pk-garbage-n">0</b></div>`;
-        const lb = document.querySelector('.leaderboard-panel');
-        lb.parentNode.insertBefore(panel, lb);
+        document.querySelector('.sidebar').appendChild(panel);
 
         const banner = document.createElement('div');
         banner.id = 'pk-banner';
@@ -342,7 +345,6 @@
         show('pk-panel', true);
         document.body.classList.add('pk-mode');
         show('pk-menu-btn', true);
-        document.querySelector('.leaderboard-panel').classList.add('hidden');
         const pauseBtn = document.getElementById('btn-pause');
         if (pauseBtn) pauseBtn.classList.add('hidden');
         const [, opp] = opponentEntry();
@@ -570,6 +572,29 @@
     }
 
     // ------------------------------------------------------------------
+    //  首頁排行榜 TOP 10（自動輪播捲動）
+    // ------------------------------------------------------------------
+    async function loadRanking() {
+        const ol = $('#pk-rank-list');
+        if (!ol) return;
+        let list = [];
+        try { list = net ? await net.topBest(10) : []; } catch (e) { console.warn(e); }
+        if (!list.length) { ol.innerHTML = `<li class="pk-hint">${net ? '還沒有紀錄，來當第一名吧！' : 'PK 連線啟用後顯示'}</li>`; ol.classList.remove('pk-rolling'); return; }
+        const medal = (i) => ['🥇', '🥈', '🥉'][i] || `${i + 1}.`;
+        const row = (p, i) => `<li class="${me && p.code === me.code ? 'me' : ''}"><span>${medal(i)} ${esc(p.name)} <span class="pk-tag">#${esc(p.code || '')}</span></span><b>${p.best}</b></li>`;
+        const html = list.map(row).join('');
+        // 超過 5 名時複製一份清單，做成無縫循環捲動
+        if (list.length > 5) {
+            ol.innerHTML = html + html;
+            ol.style.setProperty('--rank-dur', `${list.length * 2.2}s`);
+            ol.classList.add('pk-rolling');
+        } else {
+            ol.innerHTML = html;
+            ol.classList.remove('pk-rolling');
+        }
+    }
+
+    // ------------------------------------------------------------------
     //  啟動
     // ------------------------------------------------------------------
     async function boot() {
@@ -589,6 +614,7 @@
         if (!cfg && !useLocal) {
             show('pk-online', false);
             renderMe();
+            loadRanking();
             status('PK 對戰需要先完成 Firebase 設定。');
             return;
         }
@@ -613,6 +639,8 @@
             return list.length ? list.map((p) => ({ name: `${p.name}`, score: p.best })) : [{ name: '還沒有紀錄', score: 0 }];
         };
         LeaderboardAPI.submitScore = async () => LeaderboardAPI.fetchTopScores();
+        loadRanking();
+        setInterval(() => { if (!document.getElementById('pk-lobby').classList.contains('hidden')) loadRanking(); }, 60000);
 
         const needName = () => { if (!me.name) { status('請先輸入暱稱。'); const i = $('#pk-name-input'); if (i) i.focus(); return true; } return false; };
         $('#pk-create').onclick = () => { if (!needName()) createRoom().catch((e) => status('建立房間失敗：' + (e.code || e.message || e))); };

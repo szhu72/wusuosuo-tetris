@@ -69,3 +69,17 @@ body.pk-mode .sidebar > .panel:nth-child(2) .stat-item:nth-child(2),
 body.pk-mode .sidebar > .panel:nth-child(2) .stat-item:nth-child(4) { display: none; }
 body.pk-mode .sidebar { gap: 6px; }
 .pk-panel { overflow: hidden; padding: 6px 8px; }
+
+/* 首頁排行榜 TOP 10：自動輪播 */
+.pk-rank { border-top: 1px dashed #3d3d6b; padding-top: 10px; }
+.pk-rank h3 { margin-bottom: 6px; }
+.pk-rank-viewport { height: 140px; overflow: hidden; position: relative;
+  -webkit-mask-image: linear-gradient(transparent, #000 12%, #000 88%, transparent); mask-image: linear-gradient(transparent, #000 12%, #000 88%, transparent); }
+.pk-rank-list { list-style: none; margin: 0; padding: 0; }
+.pk-rank-list li { display: flex; justify-content: space-between; align-items: center; height: 28px; padding: 0 8px; font-size: 13px; border-bottom: 1px solid #2c2c50; }
+.pk-rank-list li b { color: #feca57; font-variant-numeric: tabular-nums; }
+.pk-rank-list li.me { background: rgba(78, 204, 163, .14); border-radius: 4px; }
+.pk-rank-list.pk-rolling { animation: pk-rank-roll var(--rank-dur, 22s) linear infinite; }
+.pk-rank-viewport:hover .pk-rank-list, .pk-rank-viewport:active .pk-rank-list { animation-play-state: paused; }
+@keyframes pk-rank-roll { from { transform: translateY(0); } to { transform: translateY(-50%); } }
+@media (prefers-reduced-motion: reduce) { .pk-rank-list.pk-rolling { animation: none; } .pk-rank-viewport { overflow-y: auto; } }
