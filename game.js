@@ -91,6 +91,8 @@ class SlimeSFX {
         }
     }
     land() { this.tone(180, 0.07, { type: 'sine', vol: 0.09, slide: 0.6 }); }
+    blackhole() { this.tone(400, 0.6, { type: 'sine', vol: 0.12, slide: 0.15 }); this.tone(800, 0.5, { type: 'triangle', vol: 0.05, slide: 0.1, delay: 0.05 }); }
+    purify() { [1046.5, 1318.5, 1568, 2093].forEach((f, i) => this.tone(f, 0.1, { type: 'sine', vol: 0.07, delay: 0.15 + i * 0.05 })); }
     levelUp() { [659.25, 880, 1174.7].forEach((f, i) => this.tone(f, 0.12, { type: 'square', vol: 0.06, delay: i * 0.07 })); }
     bomb() { this.tone(90, 0.35, { type: 'sawtooth', vol: 0.14, slide: 0.4 }); this.tone(60, 0.4, { type: 'square', vol: 0.06, slide: 0.5, delay: 0.03 }); }
     melt() { this.tone(900, 0.14, { type: 'sine', vol: 0.08, slide: 0.45 }); }
@@ -136,7 +138,7 @@ class SlimeTetris {
         this.special = !!opts.special;
         this.specialRng = typeof opts.seed === 'number' ? mulberry32(opts.seed ^ 0x51ED5EED) : Math.random;
         this.SPECIAL_RATE = 1 / 9;
-        this.SPECIAL_KINDS = [['star', 0.3], ['bomb', 0.25], ['melt', 0.2], ['zombie', 0.25]];
+        this.SPECIAL_KINDS = [['star', 0.27], ['bomb', 0.23], ['melt', 0.18], ['zombie', 0.22], ['blackhole', 0.10]];
         this.clearMods = null;
         this.sfx = window.__slimeSfx || (window.__slimeSfx = new SlimeSFX());
         // 方向鍵長按：鍵盤 / 觸控分開設定（DAS＝開始連續移動前的等待，ARR＝之後每格間隔，毫秒）
@@ -275,6 +277,7 @@ class SlimeTetris {
         let color = SlimeTetris.cellColor(cell);
         if (kind === 'zombie') color = '#8aa889';      // 殭屍：灰綠色
         if (kind === 'hard') color = '#55556a';        // 硬殼垃圾：深灰
+        if (kind === 'blackhole') color = '#3a2a5e';   // 黑洞：深紫
         this.drawSlimeBody(ctx, x, y, color, size, fx);
         if (kind) this.drawAccessory(ctx, x * size, y * size, size, kind, fx);
     }
@@ -321,6 +324,11 @@ class SlimeTetris {
             ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(px + s * 0.68, py + s * 0.47, s * 0.05, 0, Math.PI * 2); ctx.fill();
             ctx.strokeStyle = '#2d3a2d'; ctx.lineWidth = Math.max(1, s * 0.06);
             ctx.beginPath(); ctx.moveTo(px + s * 0.35, py + s * 0.74); ctx.lineTo(px + s * 0.45, py + s * 0.7); ctx.lineTo(px + s * 0.55, py + s * 0.74); ctx.lineTo(px + s * 0.65, py + s * 0.7); ctx.stroke();
+        } else if (kind === 'blackhole') {
+            const cx = px + s / 2, cy = py + s * 0.52;
+            ctx.strokeStyle = 'rgba(190,150,255,.9)'; ctx.lineWidth = Math.max(1, s * 0.06);
+            for (let i = 0; i < 2; i++) { ctx.beginPath(); ctx.ellipse(cx, cy, s * (0.42 - i * 0.12), s * (0.16 - i * 0.05), -0.35, 0, Math.PI * 2); ctx.stroke(); }
+            ctx.fillStyle = '#05030c'; ctx.beginPath(); ctx.arc(cx, cy, s * 0.11, 0, Math.PI * 2); ctx.fill();
         } else if (kind === 'hard') {
             ctx.fillStyle = '#9aa0b4';
             ctx.beginPath(); ctx.moveTo(px + s * 0.08, py + s * 0.42); ctx.quadraticCurveTo(px + s * 0.5, py - s * 0.12, px + s * 0.92, py + s * 0.42); ctx.closePath(); ctx.fill();
@@ -720,19 +728,27 @@ class SlimeTetris {
         for (let r = 0; r < this.ROWS; r++) if (this.board[r].every(cell => cell !== 0)) full.push(r);
         if (full.length) {
             // 結算消除行裡的特殊史萊姆：⭐ 計分 ×2、攻擊 +1；💣 炸掉上下格；🧟 自己加兩行垃圾
-            const mods = { stars: 0, bombs: [], zombies: 0 };
-            full.forEach((r) => this.board[r].forEach((cell, c) => {
-                const k = SlimeTetris.cellKind(cell);
-                if (k === 'star') mods.stars++;
-                else if (k === 'bomb') mods.bombs.push([r, c]);
-                else if (k === 'zombie') mods.zombies++;
-            }));
+            // 🧟 殭屍若與 💣 炸彈在同一行、或被 🕳 黑洞吞掉 → 淨化（不懲罰，還加分）
+            const mods = { stars: 0, bombs: [], zombies: 0, purified: 0, blackhole: false };
+            full.forEach((r) => {
+                const kinds = this.board[r].map(SlimeTetris.cellKind);
+                const rowHasBomb = kinds.includes('bomb');
+                kinds.forEach((k, c) => {
+                    if (k === 'star') mods.stars++;
+                    else if (k === 'bomb') mods.bombs.push([r, c]);
+                    else if (k === 'blackhole') mods.blackhole = true;
+                    else if (k === 'zombie') { if (rowHasBomb) mods.purified++; else mods.zombies++; }
+                });
+            });
+            if (mods.blackhole) { mods.purified += mods.zombies; mods.zombies = 0; }
             this.clearMods = mods;
             this.clearing = { rows: full, t0: performance.now(), mods };
             this.piece = null;
             this.sfx.clear(full.length, this.combo + 1);
             if (mods.bombs.length) this.sfx.bomb();
-            if (mods.zombies) this.sfx.zombie();
+            if (mods.blackhole) this.sfx.blackhole();
+            else if (mods.zombies) this.sfx.zombie();
+            if (mods.purified) this.sfx.purify();
             this.spawnParticles(full);
             return;
         }
@@ -754,11 +770,24 @@ class SlimeTetris {
             const rows = new Set();
             for (let r = 0; r < this.ROWS; r++) if (this.board[r].every(cell => cell !== 0)) rows.add(r);
             mods.bombs.forEach(([r, c]) => [r - 1, r + 1].forEach((rr) => {
-                if (rr >= 0 && rr < this.ROWS && !rows.has(rr) && this.board[rr][c]) { this.board[rr][c] = 0; mods.blasted = (mods.blasted || 0) + 1; }
+                if (rr >= 0 && rr < this.ROWS && !rows.has(rr) && this.board[rr][c]) {
+                    if (SlimeTetris.cellKind(this.board[rr][c]) === 'zombie') mods.purified++;
+                    this.board[rr][c] = 0; mods.blasted = (mods.blasted || 0) + 1;
+                }
             }));
+        }
+        // 🕳 黑洞：吞掉滿行以外的所有方塊（殭屍一起被淨化），本次得分只拿 8 成
+        if (mods && mods.blackhole) {
+            let vacuumed = 0;
+            for (let r = 0; r < this.ROWS; r++) {
+                if (this.board[r].every(cell => cell !== 0)) continue;
+                this.board[r].forEach((cell) => { if (cell) { vacuumed++; if (SlimeTetris.cellKind(cell) === 'zombie') mods.purified++; } });
+            }
+            mods.vacuumed = vacuumed;
         }
         this.clearLines();
         this.clearMods = null;
+        if (mods && mods.blackhole) this.board = this.board.map(() => Array(this.COLS).fill(0));
         // 🧟 殭屍：每隻殭屍讓自己底下冒出 2 行垃圾（陷阱）
         if (mods && mods.zombies) {
             if (this.addGarbageRows(Math.min(4, mods.zombies * 2), false)) { this.endGame(); return; }
@@ -808,7 +837,8 @@ class SlimeTetris {
             
             // 連擊（Combo）加權：得分 = 基礎得分 × (1 + Combo數 × 0.5)；⭐ 星星史萊姆 ×2；💣 每炸掉 1 格 +20
             const mods = this.clearMods || {};
-            const addScore = base * (1 + this.combo * 0.5) * (mods.stars ? 2 : 1) + (mods.blasted || 0) * 20;
+            let addScore = base * (1 + this.combo * 0.5) * (mods.stars ? 2 : 1) + (mods.blasted || 0) * 20 + (mods.purified || 0) * 100;
+            if (mods.blackhole) addScore = (addScore + (mods.vacuumed || 0) * 10) * 0.8;
             this.score += addScore;
             this.lines += cleared;
             this.combo++;
@@ -944,10 +974,25 @@ class SlimeTetris {
                     const flash = p < 0.55 && Math.floor((now - clr.t0) / 70) % 2 === 0;
                     const scale = q > 0 ? (q < 0.25 ? 1 + q * 0.6 : Math.max(0, 1.15 - (q - 0.25) * 1.55)) : 1 + Math.sin(p * Math.PI * 6) * 0.04;
                     this.drawSlimeBlock(this.ctx, c, r, this.board[r][c], this.SIZE, { face: 'happy', flash, scale, alpha: 1 - q * 0.9 });
+                } else if (clr && clr.mods && clr.mods.blackhole) {
+                    // 🕳 被吸進黑洞：往中心縮小、淡出
+                    this.ctx.save();
+                    const k = Math.min(1, p * 1.2);
+                    const cx = this.W / 2, cy = this.H / 2;
+                    const bx = (c + 0.5) * this.SIZE, by = (r + 0.5) * this.SIZE;
+                    this.ctx.translate((cx - bx) * k * k, (cy - by) * k * k);
+                    this.drawSlimeBlock(this.ctx, c, r, this.board[r][c], this.SIZE, { scale: 1 - k * 0.9, alpha: 1 - k * 0.8 });
+                    this.ctx.restore();
                 } else {
                     this.drawSlimeBlock(this.ctx, c, r, this.board[r][c], this.SIZE, landScale(`${c},${r}`));
                 }
             }
+        }
+        if (clr && clr.mods && clr.mods.blackhole) {   // 黑洞漩渦
+            const R = 10 + p * 70;
+            const grd = this.ctx.createRadialGradient(this.W / 2, this.H / 2, 0, this.W / 2, this.H / 2, R);
+            grd.addColorStop(0, 'rgba(0,0,0,.95)'); grd.addColorStop(0.6, 'rgba(90,40,160,.55)'); grd.addColorStop(1, 'rgba(90,40,160,0)');
+            this.ctx.fillStyle = grd; this.ctx.beginPath(); this.ctx.arc(this.W / 2, this.H / 2, R, 0, Math.PI * 2); this.ctx.fill();
         }
         if (clr && p < 0.55) {   // 整行發光
             this.ctx.fillStyle = `rgba(255, 255, 255, ${0.12 + 0.1 * Math.sin(p * Math.PI * 8)})`;

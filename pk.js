@@ -240,7 +240,7 @@
     let variant = (() => { try { return localStorage.getItem('slime_variant') === 'special' ? 'special' : 'classic'; } catch { return 'classic'; } })();
     const sfxKey = (special) => (special ? 'Sp' : '');          // 欄位後綴：best / bestSp、wins / winsSp…
     const variantName = (special) => (special ? '特殊史萊姆' : '經典');
-    const SPECIAL_HELP = '⭐ 星星：該次消除分數 ×2、攻擊 +1　💣 炸彈：連同上下格一起炸掉　💧 融化：落地往下滴補洞　🧟 殭屍：消除時自己冒出 2 行垃圾（陷阱）　🛡 硬殼垃圾（PK）：要消 2 次';
+    const SPECIAL_HELP = '⭐ 星星：該次消除分數 ×2、攻擊 +1　💣 炸彈：連同上下格一起炸掉　💧 融化：落地往下滴補洞　🧟 殭屍：一般消除會讓自己冒出 2 行垃圾，但被炸彈或黑洞處理掉可淨化並加分　🕳 黑洞：消除時清空整個盤面，本次得分只拿 8 成　🛡 硬殼垃圾（PK）：要消 2 次';
     let selMode = { mode: 'timed', duration: 180 };
     function modeText(m) { return m.mode === 'survival' ? '生存 PK：不限時間，先堆到頂的人輸，每 40 秒自動加速。' : `計時 PK：${m.duration / 60} 分鐘內消除行數多的人贏；中途有人堆到頂就直接判輸、提早結束。`; }
 
